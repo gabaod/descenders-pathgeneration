@@ -8,5 +8,5 @@ Then i drag each point to the position i want on the terrain in sequential order
 Then define all settings and click generate path<br><br><br>
 important: if you export scene you loose access to restore previous terrain always backup data first or instantly clear road to go back to previous terrain settings<br><br>
 
-example before i fixed the curbs on terrain level and material if not defined to allow painted texture and if defined to fulfill same zone as painted texture  https://youtu.be/dPUqiEfy-a0
+example before fixing smoothness between drastic elevation changes and fixed the curbs on terrain level, and also if material is not defined to allow painted texture and if defined to fulfill same zone as painted texture  https://youtu.be/dPUqiEfy-a0
 
