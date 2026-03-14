@@ -230,6 +230,20 @@ public class RoadPathGeneratorEditor : Editor
         DrawHorizontalLine(Color.grey);
         GUILayout.Space(4f);
 
+        EditorGUILayout.LabelField("Bake Mesh", EditorStyles.boldLabel);
+        GUI.backgroundColor = new Color(0.8f, 0.7f, 1.0f);
+        if (GUILayout.Button("Bake Mesh to Object", GUILayout.Height(26)))
+        {
+            Undo.RecordObject(_gen, "Bake Mesh to Object");
+            _gen.BakeMeshToObject();
+            EditorUtility.SetDirty(_gen);
+        }
+        GUI.backgroundColor = Color.white;
+
+        GUILayout.Space(6f);
+        DrawHorizontalLine(Color.grey);
+        GUILayout.Space(4f);
+
         // ── Generate / Clear / Restore ────────────────────────
         EditorGUILayout.LabelField("Generation", EditorStyles.boldLabel);
         EditorGUILayout.BeginHorizontal();
@@ -238,6 +252,7 @@ public class RoadPathGeneratorEditor : Editor
         if (GUILayout.Button("Generate Road", GUILayout.Height(32)))
         {
             Undo.RecordObject(_gen, "Generate Road");
+            _gen._skipTerrainShaping = false;
             _gen.GenerateRoad();
             EditorUtility.SetDirty(_gen);
         }
@@ -297,6 +312,7 @@ public class RoadPathGeneratorEditor : Editor
     void OnSceneGUI()
     {
         if (_gen == null || _gen.controlPoints == null) return;
+        _gen._skipTerrainShaping = _editMode;
 
         GUIStyle labelStyle = new GUIStyle(GUI.skin.label);
         labelStyle.fontStyle = FontStyle.Bold;
@@ -333,7 +349,6 @@ public class RoadPathGeneratorEditor : Editor
                 Undo.RecordObject(t, "Move Road Point");
                 t.position = newPos;
                 EditorUtility.SetDirty(t);
-                _gen.GenerateRoad();
                 EditorUtility.SetDirty(_gen);
             }
         }
@@ -371,7 +386,6 @@ public class RoadPathGeneratorEditor : Editor
             RaycastHit hit;
             if (Physics.Raycast(ray, out hit))
             {
-                Undo.RecordObject(_gen, "Add Road Point");
                 AddPointAtPosition(hit.point);
                 e.Use();
             }
@@ -392,11 +406,17 @@ public class RoadPathGeneratorEditor : Editor
             pos = last != null ? last.position + last.forward * 5f : _gen.transform.position;
         }
         else pos = _gen.transform.position;
+        Terrain terrain = Terrain.activeTerrain;
+        if (terrain != null)
+            pos.y = terrain.SampleHeight(pos) + terrain.transform.position.y;
         AddPointAtPosition(pos);
     }
 
     void AddPointAtPosition(Vector3 worldPos)
     {
+        Terrain terrain = Terrain.activeTerrain;
+        if (terrain != null)
+            worldPos.y = terrain.SampleHeight(worldPos) + terrain.transform.position.y;
         GameObject go = new GameObject("RoadPoint_" + _gen.controlPoints.Count);
         go.transform.SetParent(_gen.transform);
         go.transform.position = worldPos;
