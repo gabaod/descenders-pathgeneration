@@ -54,13 +54,22 @@ public class RoadPathGenerator : ModBehaviour
 {
     // ── Control Points ────────────────────────────────────────
     [Header("Control Points")]
+    [Tooltip("List of transforms that define the road path.\n" +
+             "At least 2 points are required.  Add via the inspector buttons\n" +
+             "or Shift+Right-click in the scene when Edit Points Mode is active.")]
     public List<Transform> controlPoints = new List<Transform>();
+
+    [Tooltip("When true, connects the last control point back to the first,\n" +
+             "forming a closed loop circuit road.")]
     public bool closedLoop = false;
 
     // ── Spline / Resolution ───────────────────────────────────
     [Header("Spline Resolution")]
+    [Tooltip("Number of mesh segments generated between each pair of control points.\n" +
+             "Higher values produce a smoother road curve but increase vertex count.\n" +
+             "20-30 is sufficient for most roads.")]
     [Range(2, 64)]
-    public int segmentsPerCurve = 12;
+    public int segmentsPerCurve = 20;
 
     [Tooltip("Multiplier applied to segmentsPerCurve when building the spline used exclusively\n" +
              "for terrain operations (flatten, berm, ridge cap, ditch, shoulder smooth, paint).\n\n" +
@@ -74,14 +83,32 @@ public class RoadPathGenerator : ModBehaviour
              "4 – 8x multiplier eliminates zigzag entirely for most road widths.\n" +
              "Higher values are more accurate but slower to generate.\n" +
              "1 = same density as the mesh (original behaviour, zigzag visible).")]
-    [Range(1, 8)]
+    [Range(0, 8)]
     public int terrainSplineSubdivision = 4;
+
+    [Header("Keep this checked unless you want to build a mesh for the curbs")]
+    [Tooltip("Tick this once you are happy with the generated road and have baked the mesh.\n" +
+         "When true, Start() will skip all generation and terrain work entirely.\n" +
+         "Untick if you need to re-generate the road in the editor.")]
+    public bool generationComplete = true;
+
+    // ── Baked Mesh ────────────────────────────────────────────
+    [Header("Baked Mesh - only with use for curbs")]
+    [Tooltip("Assign an empty GameObject here after clicking Generate Road,\n" +
+             "then click Bake Mesh to Object.  At runtime Start() will detect\n" +
+             "the pre-built mesh and skip all generation entirely.")]
+    public GameObject bakedMeshObject;
 
     // ── Road Geometry ─────────────────────────────────────────
     [Header("Road Geometry")]
+    [Tooltip("Total width of the road surface in world units, measured edge to edge.")]
     [Range(0.5f, 50f)]
-    public float roadWidth = 6f;
+    public float roadWidth = 10f;
 
+    [Tooltip("Thickness of the road mesh in world units.\n" +
+             "Adds a bottom face to the road surface so it does not appear\n" +
+             "paper-thin when viewed from the side or below.\n" +
+             "0 = single surface with no underside.")]
     [Range(0f, 2f)]
     public float roadThickness = 0.1f;
 
@@ -90,47 +117,66 @@ public class RoadPathGenerator : ModBehaviour
     public float camberDegrees = 0f;
 
     // ── Road Material ─────────────────────────────────────────
-    [Header("Road Material")]
+    [Header("Road Material - not tested")]
+    [Tooltip("Default material applied to the road surface mesh.\n" +
+             "Can be overridden per segment in the Segment Styles list below.")]
     public Material roadMaterial;
 
+    [Tooltip("Length in world units over which the road texture tiles once\n" +
+             "along the road direction.  Smaller = more frequent tiling.\n" +
+             "Match to your texture's real-world scale for best results.")]
     [Range(0.1f, 50f)]
     public float uvTileLength = 10f;
 
     // ── Curbs / Shoulders ─────────────────────────────────────
-    [Header("Curbs / Shoulders")]
+    [Header("Curbs / Shoulders - currently broken")]
+    [Tooltip("Generate raised curb strips along both edges of the road.\n" +
+             "Curbs are baked into the road mesh as additional submeshes.\n" +
+             "Can be overridden per segment in the Segment Styles list.")]
     public bool generateCurbs = false;
 
+    [Tooltip("Height of the curb above the road edge surface in world units.")]
     [Range(0.05f, 2f)]
     public float curbHeight = 0.2f;
 
+    [Tooltip("Width of the curb strip in world units, measured outward from the road edge.")]
     [Range(0.1f, 3f)]
     public float curbWidth = 0.4f;
 
+    [Tooltip("Material applied to the curb mesh.\n" +
+             "Can be overridden per segment in the Segment Styles list.")]
     public Material curbMaterial;
 
     // ── Berm / Embankment ─────────────────────────────────────
     [Header("Berm / Embankment")]
-    public bool generateBerm = false;
+    [Tooltip("Stamps an embankment slope on both sides of the road that blends\n" +
+             "from the road edge height back down to natural terrain.\n" +
+             "Useful for elevated roads or cutting a road into a hillside.")]
+    public bool generateBerm = true;
 
+    [Tooltip("Distance in world units from the road edge to where the berm slope\n" +
+             "reaches natural terrain level.  Larger = gentler, wider embankment.")]
     [Range(0.5f, 40f)]
-    public float bermSlopeDistance = 6f;
+    public float bermSlopeDistance = 25f;
 
     [Tooltip("0 = linear slope, 1 = smooth S-curve.")]
     [Range(0f, 1f)]
     public float bermCurvature = 0.5f;
 
+    [Tooltip("Distance in world units over which the berm blends back to natural\n" +
+             "terrain at its outer edge.  Prevents a hard seam at the berm toe.")]
     [Range(0f, 10f)]
     public float bermOuterFalloff = 1.5f;
 
     // ── Ridge Cap ─────────────────────────────────────────────
-    [Header("Ridge Cap")]
+    [Header("Ridge Cap - only used with camber")]
     [Tooltip("Stamps a smooth rounded bell-curve profile centred on EACH road edge.\n\n" +
              "This eliminates the triangular peaks that appear between spline segments\n" +
              "at the cambered edge.  The bell extends ridgeCapWidth metres on BOTH sides\n" +
              "of the road edge, creating a rolling-hill transition between the cambered\n" +
              "road surface and the berm / natural shoulder.\n\n" +
              "Only active when |camberDegrees| > 0.1°.")]
-    public bool applyRidgeCap = true;
+    public bool applyRidgeCap = false;
 
     [Tooltip("Half-width of the smooth rolling-hill zone in world units.\n" +
              "The bell profile is centred on the road edge and extends this distance\n" +
@@ -138,7 +184,7 @@ public class RoadPathGenerator : ModBehaviour
              "1 – 3 m produces the 'rolling hill' look.  Match to your bermSlopeDistance\n" +
              "for a seamless join between the cap and the berm.")]
     [Range(0.5f, 8f)]
-    public float ridgeCapWidth = 2.5f;
+    public float ridgeCapWidth = 6f;
 
     [Tooltip("0 = wide cosine bell (broad, gentle hill).\n" +
              "1 = narrow Gaussian bell (tighter crest).\n" +
@@ -156,7 +202,7 @@ public class RoadPathGenerator : ModBehaviour
              "stamped.  2 – 3 passes removes micro-jaggedness at the crest without\n" +
              "touching terrain outside the cap zone.")]
     [Range(0, 6)]
-    public int ridgeCapSmoothPasses = 2;
+    public int ridgeCapSmoothPasses = 3;
 
     [Tooltip("Extra world-unit height added to the crest of the ridge cap bell.\n\n" +
              "0  = crest sits exactly at the cambered road-edge height (flush).\n" +
@@ -168,7 +214,7 @@ public class RoadPathGenerator : ModBehaviour
              "strength at the road edge and tapers smoothly to zero at ridgeCapWidth,\n" +
              "keeping the transition perfectly rounded with no sharp steps.")]
     [Range(-5f, 5f)]
-    public float ridgeCapHeight = 0f;
+    public float ridgeCapHeight = 2f;
 
     // ── Ditch / Drainage ─────────────────────────────────────
     [Header("Ditch / Drainage")]
@@ -180,34 +226,34 @@ public class RoadPathGenerator : ModBehaviour
              "  road edge\n" +
              "  <── ditchOffset ──> <─inner─> <─bottom─> <─outer─>\n" +
              "                      ↘                    ↗  natural terrain")]
-    public bool generateDitch = false;
+    public bool generateDitch = true;
 
     [Tooltip("Distance from the road edge to the top of the inner ditch wall (world units).\n" +
              "Set to bermSlopeDistance + bermOuterFalloff to start exactly at the berm toe.")]
     [Range(0f, 40f)]
-    public float ditchOffset = 8f;
+    public float ditchOffset = 2f;
 
     [Tooltip("Width of the slope descending INTO the ditch from the road / berm side (world units).\n" +
              "Larger = gentler grade down.  Smaller = steeper cut.")]
     [Range(0.5f, 20f)]
-    public float ditchInnerWidth = 3f;
+    public float ditchInnerWidth = 5f;
 
     [Tooltip("Width of the flat ditch floor (world units).\n" +
              "0  = V-ditch (inner and outer walls meet at a point).\n" +
              ">0 = U/trapezoidal ditch with a flat bottom.")]
     [Range(0f, 10f)]
-    public float ditchBottomWidth = 1f;
+    public float ditchBottomWidth = 4f;
 
     [Tooltip("Width of the slope climbing OUT of the ditch back to natural terrain (world units).\n" +
              "Larger = gentler grade up.  Usually >= ditchInnerWidth for a natural asymmetric look.")]
     [Range(0.5f, 20f)]
-    public float ditchOuterWidth = 4f;
+    public float ditchOuterWidth = 5f;
 
     [Tooltip("Maximum depth of the ditch floor below the terrain surface at the inner wall start (world units).\n" +
              "The bottom is cut this deep below whatever height the terrain already has at that point\n" +
              "(i.e. after flatten / berm have run), so the ditch always reads as a positive excavation.")]
     [Range(0.1f, 10f)]
-    public float ditchDepth = 1.0f;
+    public float ditchDepth = 2.0f;
 
     [Tooltip("Shape of the ditch wall profiles.\n" +
              "0 = straight linear slopes (sharp V or flat trapezoid).\n" +
@@ -220,83 +266,157 @@ public class RoadPathGenerator : ModBehaviour
              "1.0 = fully cuts to the target depth profile.\n" +
              "Lower values produce a shallower impression — good for subtle drainage hints.")]
     [Range(0f, 1f)]
-    public float ditchStrength = 1.0f;
+    public float ditchStrength = 0.75f;
 
     [Tooltip("Number of Gaussian smoothing passes applied inside the ditch zone after carving.\n" +
              "Smooths the walls and floor without touching terrain outside the zone.\n" +
              "2 – 3 passes for a natural rounded gutter; more for soft swale-like features.")]
     [Range(0, 6)]
-    public int ditchSmoothPasses = 2;
+    public int ditchSmoothPasses = 3;
 
     [Tooltip("Gaussian kernel radius (world units) during ditch smoothing passes.\n" +
              "Larger radius = broader blending across walls and floor.")]
     [Range(0.5f, 10f)]
-    public float ditchSmoothRadius = 2f;
+    public float ditchSmoothRadius = 4f;
 
     // ── Shoulder Smoothing ────────────────────────────────────
     [Header("Terrain – Shoulder Smoothing")]
+    [Tooltip("Apply Gaussian smoothing to the terrain shoulder zone on both sides\n" +
+             "of the road after all other terrain passes have run.\n" +
+             "Softens any remaining hard edges or artefacts at the road boundary.")]
     public bool smoothShoulder = true;
 
+    [Tooltip("Number of Gaussian smoothing passes applied to the shoulder zone.\n" +
+             "More passes = softer shoulder but slower generation.")]
     [Range(0, 10)]
     public int shoulderSmoothPasses = 3;
 
+    [Tooltip("Distance in world units outward from the road edge that the shoulder\n" +
+             "smoothing covers.  Automatically clamped to stop at the ditch zone\n" +
+             "start when a ditch is active, preventing it from undoing the carve.")]
     [Range(0.5f, 50f)]
     public float shoulderSmoothDistance = 12f;
 
+    [Tooltip("Gaussian kernel radius in world units for shoulder smoothing.\n" +
+             "Larger radius = broader, softer blending across the shoulder zone.")]
     [Range(0.5f, 20f)]
     public float shoulderSmoothRadius = 5f;
 
+    [Tooltip("How far in world units the shoulder smoothing kernel reaches inward\n" +
+             "past the road edge.  A small overlap blends the transition between\n" +
+             "the flat road surface and the smoothed shoulder.")]
     [Range(0f, 5f)]
     public float shoulderSmoothInwardOverlap = 1.5f;
 
     // ── Collider ──────────────────────────────────────────────
-    [Header("Collider")]
-    public bool generateCollider = true;
+    [Header("Collider - only used for curbs")]
+    [Tooltip("Generate a MeshCollider for the road surface so players and physics\n" +
+             "objects interact with it.  Can be disabled per segment in Segment Styles.\n" +
+             "Disable if the terrain collider alone is sufficient.")]
+    public bool generateCollider = false;
 
     // ── Terrain – Snap ────────────────────────────────────────
     [Header("Terrain – Snap")]
+    [Tooltip("Snap each spline point vertically onto the terrain surface before\n" +
+             "building the road mesh.  Ensures the road sits flush on the terrain\n" +
+             "rather than floating above or sinking below it.")]
     public bool snapToTerrain = true;
 
+    [Tooltip("Small upward offset in world units applied after snapping to terrain.\n" +
+             "Prevents z-fighting between the road mesh and terrain surface.\n" +
+             "0.05 is usually sufficient.")]
     [Range(0f, 1f)]
     public float terrainSnapOffset = 0.05f;
 
     // ── Terrain – Slope Flatten ───────────────────────────────
     [Header("Terrain – Slope Flatten")]
-    public bool flattenTerrain = false;
+    [Tooltip("Flatten the terrain heightmap along the road corridor so the road\n" +
+             "surface sits on level ground.  Uses slope-limited smoothing to avoid\n" +
+             "sharp cuts into the terrain on steep sections.")]
+    public bool flattenTerrain = true;
 
-    [Range(1f, 60f)]
-    public float maxSlopeDegrees = 20f;
+    [Range(1f, 30f)]
+    [Tooltip("Maximum uphill grade in degrees. Slope limiting is enforced on climbs.\n" +
+             "Keeps the path rideable and prevents flatten from over-raising terrain.")]
+    public float maxUphillDegrees = 5f;
 
+    [Range(1f, 80f)]
+    [Tooltip("Maximum downhill grade in degrees. Can be set much higher than uphill\n" +
+             "so descents follow natural terrain more closely, preserving the surrounding\n" +
+             "ground context that berm, ditch, and shoulder depend on.")]
+    public float maxDownhillDegrees = 40f;
+
+    [Tooltip("Number of forward-backward smoothing passes applied to the centreline\n" +
+             "height profile before flattening.  More passes = smoother grade changes\n" +
+             "along the road length.  5 is a good default.")]
     [Range(1, 10)]
-    public int slopeSmoothPasses = 3;
+    public int slopeSmoothPasses = 5;
 
-    [Range(10f, 200f)]
-    public float steepZoneWindowMeters = 50f;
+    [Range(0f, 45f)]
+    [Tooltip("Minimum grade change in degrees between neighbouring spline points\n" +
+             "that triggers transition smoothing.  Lower = more sensitive.\n" +
+             "3-5 degrees catches most abrupt transitions without over-smoothing.")]
+    public float transitionAngleThreshold = 4f;
+
+    [Range(1f, 40f)]
+    [Tooltip("World unit radius around each detected transition point that gets\n" +
+             "smoothed.  20m covers roughly the run-in and run-out of most\n" +
+             "abrupt grade changes without touching the steady slope either side.")]
+    public float transitionSmoothRadius = 30f;
 
     [Range(0, 20)]
-    public int steepZoneExtraPasses = 8;
+    [Tooltip("Number of Gaussian smoothing passes applied at transition points.\n" +
+             "6-10 is enough for most transitions.  Higher = smoother but slower.")]
+    public int transitionSmoothPasses = 15;
 
+    [Tooltip("Extra width in world units added beyond the road edge on each side\n" +
+             "that is fully flattened.  Clears bumps right at the road shoulder.")]
     [Range(0f, 20f)]
     public float flattenExtraWidth = 1f;
 
+    [Tooltip("Width in world units beyond flattenExtraWidth over which the flatten\n" +
+             "blends back to natural terrain height.  Prevents a hard cliff edge\n" +
+             "at the outer boundary of the flattened zone.")]
     [Range(0f, 20f)]
     public float flattenFalloff = 3f;
 
+    [Tooltip("When true, flattens terrain on both sides of the road beyond the road width\n" +
+         "before Berm, Ditch, and Shoulder operations run.\n" +
+         "Useful for clearing uneven ground adjacent to the road corridor.")]
+    public bool flattenBeyondPath = true;
+
+    [Tooltip("Distance in world units to flatten outward from each road edge.\n" +
+             "Applied before Berm, Ditch, and Shoulder Smoothing.")]
+    [Range(1f, 30f)]
+    public float flattenBeyondDistance = 15f;
+
     // ── Terrain – Paint ───────────────────────────────────────
     [Header("Terrain – Paint")]
-    public bool paintTerrain = false;
+    [Tooltip("Paint a terrain texture layer along the road corridor after all\n" +
+             "terrain height operations have completed.\n" +
+             "Uses the alphamap so it blends naturally with surrounding textures.")]
+    public bool paintTerrain = true;
 
+    [Tooltip("Terrain texture layer index to paint onto the road surface globally.\n" +
+             "Must match a valid layer index in the terrain's terrain data.\n" +
+             "Can be overridden per segment in the Segment Styles list.")]
     [Range(0, 15)]
-    public int paintTextureIndex = 0;
+    public int paintTextureIndex = 1;
 
+    [Tooltip("Extra paint width in world units beyond the road edge on each side.\n" +
+             "Paints a shoulder strip alongside the road surface globally.")]
     [Range(0f, 20f)]
     public float paintShoulderWidth = 1f;
 
+    [Tooltip("Width in world units over which the shoulder paint fades to zero\n" +
+             "at its outer edge.  Creates a soft blend into surrounding terrain.")]
     [Range(0f, 20f)]
     public float paintShoulderFalloff = 0.8f;
 
+    [Tooltip("Global blend strength of the terrain paint.  1.0 = fully overrides\n" +
+             "existing texture.  Lower values let underlying terrain show through.")]
     [Range(0f, 1f)]
-    public float paintStrength = 0.9f;
+    public float paintStrength = 1.0f;
 
     // ── Segment Styles ────────────────────────────────────────
     [Header("Segment Styles")]
@@ -317,6 +437,7 @@ public class RoadPathGenerator : ModBehaviour
     [SerializeField, HideInInspector] private int     _savedAlphasH;
     [SerializeField, HideInInspector] private int     _savedAlphasLayers;
     [SerializeField, HideInInspector] private bool    _terrainSnapshotTaken = false;
+    [System.NonSerialized] public bool _skipTerrainShaping = false;
 
 #if UNITY_EDITOR
     float[,] GetSavedHeights()
@@ -342,7 +463,22 @@ public class RoadPathGenerator : ModBehaviour
 
     void Start()
     {
-        _meshFilter   = AddComponent<MeshFilter>(gameObject);
+        // If a baked mesh object is assigned and already carries a valid mesh,
+        // skip all generation — terrain is already baked into the TerrainData
+        // and the mesh is pre-built on the assigned object.
+        //if (bakedMeshObject != null)
+        //{
+        //   MeshFilter bmf = bakedMeshObject.GetComponent<MeshFilter>();
+        //  if (bmf != null && bmf.sharedMesh != null)
+        //      return;
+        //}
+
+        // Skip all generation if the road has been finalized in the editor.
+        // Terrain is already baked into TerrainData and the mesh exists on
+        // bakedMeshObject — there is nothing to do at runtime.
+        if (generationComplete) return;
+
+        _meshFilter = AddComponent<MeshFilter>(gameObject);
         _meshRenderer = AddComponent<MeshRenderer>(gameObject);
         if (generateCollider)
             _meshCollider = AddComponent<MeshCollider>(gameObject);
@@ -422,14 +558,34 @@ public class RoadPathGenerator : ModBehaviour
             for (int i = 0; i < terrainPts.Count; i++)
                 postFlattenH[i] = SampleTerrainHeight(terrainPts[i], at);
         }
+        // 2b. Flatten beyond path width — clears uneven ground on both sides
+        // of the road corridor before Berm, Ditch, and Shoulder ops run.
+        if (flattenBeyondPath && !_skipTerrainShaping)
+            FlattenBeyondPathWidth(terrainPts, postFlattenH);
 
         // 3. Berm
-        if (generateBerm)
+        if (generateBerm && !_skipTerrainShaping)
             ApplyBermToTerrain(terrainPts);
 
-        // 4. Ridge Cap — eliminates triangular peaks at cambered road edges
-        if (applyRidgeCap && Mathf.Abs(camberDegrees) > 0.1f)
-            ApplyRidgeCap(terrainPts, postFlattenH);
+        // Resample terrain heights after Berm so Ridge Cap works from the
+        // actual current terrain state rather than the stale post-flatten
+        // snapshot.  If Berm raised the shoulder, Ridge Cap now sees those
+        // correct elevations when computing its crest targets.
+        if (applyRidgeCap && Mathf.Abs(camberDegrees) > 0.1f && !_skipTerrainShaping)
+        {
+            Terrain _ridgeCapTerrain = Terrain.activeTerrain;
+            float[] postBermH = new float[terrainPts.Count];
+            for (int i = 0; i < terrainPts.Count; i++)
+                postBermH[i] = SampleTerrainHeight(terrainPts[i], _ridgeCapTerrain);
+
+            // 4. Ridge Cap — eliminates triangular peaks at cambered road edges
+            ApplyRidgeCap(terrainPts, postBermH);
+            // 4b. Narrow re-flatten — restores the flat cambered road bed inside
+            // the road corridor only, correcting any inward disturbance that
+            // Ridge Cap's bell zone may have written onto the road surface.
+            if (flattenTerrain && !_skipTerrainShaping)
+                ReflattenRoadSurface(terrainPts, postFlattenH);
+        }
 
         // 5. Ditch / drainage
         if (generateDitch)
@@ -445,7 +601,7 @@ public class RoadPathGenerator : ModBehaviour
             SnapToTerrain(ref _cachedSplinePoints);
 
         // 8. Paint (use terrain spline for accurate edge projection)
-        if (paintTerrain)
+        if (paintTerrain && !_skipTerrainShaping)
             PaintTerrainSection(terrainPts, null,
                                 -1, paintTextureIndex, paintShoulderWidth,
                                 paintShoulderFalloff, paintStrength);
@@ -497,6 +653,40 @@ public class RoadPathGenerator : ModBehaviour
 #endif
     }
 
+    #if UNITY_EDITOR
+    public void BakeMeshToObject()
+    {
+        // Copies the current generated mesh and materials onto bakedMeshObject
+        // so they are saved with the scene and available at runtime without
+        // needing to call GenerateRoad() again.
+        if (bakedMeshObject == null)
+        {
+            Debug.LogWarning("[RoadPathGenerator] Assign a GameObject to bakedMeshObject first.");
+            return;
+        }
+
+        MeshFilter mf = bakedMeshObject.GetComponent<MeshFilter>();
+        MeshRenderer mr = bakedMeshObject.GetComponent<MeshRenderer>();
+        MeshCollider mc = bakedMeshObject.GetComponent<MeshCollider>();
+
+        if (mf == null) mf = AddComponent<MeshFilter>(bakedMeshObject);
+        if (mr == null) mr = AddComponent<MeshRenderer>(bakedMeshObject);
+
+        if (_meshFilter != null && _meshFilter.sharedMesh != null)
+        {
+            mf.sharedMesh = _meshFilter.sharedMesh;
+            mr.sharedMaterials = _meshRenderer.sharedMaterials;
+        }
+
+        if (generateCollider && _meshCollider != null && _meshCollider.sharedMesh != null)
+        {
+            if (mc == null) mc = AddComponent<MeshCollider>(bakedMeshObject);
+            mc.sharedMesh = _meshCollider.sharedMesh;
+        }
+
+        Debug.Log("[RoadPathGenerator] Mesh baked to " + bakedMeshObject.name);
+    }
+#endif
     public void AddControlPoint(Transform point)
     {
         if (controlPoints == null) controlPoints = new List<Transform>();
@@ -865,72 +1055,128 @@ public class RoadPathGenerator : ModBehaviour
         float[] rawH = new float[pts.Count];
         for (int i = 0; i < pts.Count; i++) rawH[i] = terrain.SampleHeight(pts[i]) + terrainPos.y;
 
-        float maxTan = Mathf.Tan(maxSlopeDegrees * Mathf.Deg2Rad);
+        float maxUphillTan = Mathf.Tan(maxUphillDegrees * Mathf.Deg2Rad);
+        float maxDownhillTan = Mathf.Tan(maxDownhillDegrees * Mathf.Deg2Rad);
         float[] smoothH = new float[pts.Count];
         System.Array.Copy(rawH, smoothH, pts.Count);
 
         for (int pass = 0; pass < slopeSmoothPasses; pass++)
         {
+            // Forward pass — travelling in spline direction
+            // d > 0 = climbing,  d < 0 = descending
             for (int i = 1; i < pts.Count; i++)
             {
-                float hd = HorizDist(pts[i-1], pts[i]); if (hd < 0.001f) continue;
-                float md = hd * maxTan, d = smoothH[i] - smoothH[i-1];
-                if (Mathf.Abs(d) > md) smoothH[i] = smoothH[i-1] + Mathf.Sign(d)*md;
+                float hd = HorizDist(pts[i - 1], pts[i]); if (hd < 0.001f) continue;
+                float d = smoothH[i] - smoothH[i - 1];
+                float md = hd * (d > 0f ? maxUphillTan : maxDownhillTan);
+                if (Mathf.Abs(d) > md) smoothH[i] = smoothH[i - 1] + Mathf.Sign(d) * md;
             }
-            for (int i = pts.Count-2; i >= 0; i--)
+            // Backward pass — travelling against spline direction
+            // d > 0 means forward direction is descending, d < 0 means climbing
+            for (int i = pts.Count - 2; i >= 0; i--)
             {
-                float hd = HorizDist(pts[i], pts[i+1]); if (hd < 0.001f) continue;
-                float md = hd * maxTan, d = smoothH[i] - smoothH[i+1];
-                if (Mathf.Abs(d) > md) smoothH[i] = smoothH[i+1] + Mathf.Sign(d)*md;
+                float hd = HorizDist(pts[i], pts[i + 1]); if (hd < 0.001f) continue;
+                float d = smoothH[i] - smoothH[i + 1];
+                float md = hd * (d < 0f ? maxUphillTan : maxDownhillTan);
+                if (Mathf.Abs(d) > md) smoothH[i] = smoothH[i + 1] + Mathf.Sign(d) * md;
             }
         }
 
-        if (steepZoneExtraPasses > 0)
+        if (transitionSmoothPasses > 0 && transitionAngleThreshold < 45f)
         {
+            // Build arc length array for distance-based kernel lookups
             float[] arc = new float[pts.Count];
-            for (int i = 1; i < pts.Count; i++) arc[i] = arc[i-1] + HorizDist(pts[i-1], pts[i]);
-            float[] sw2 = new float[pts.Count];
-            float allowed = maxTan * steepZoneWindowMeters;
+            for (int i = 1; i < pts.Count; i++)
+                arc[i] = arc[i - 1] + HorizDist(pts[i - 1], pts[i]);
+
+            // Compute grade angle at each point using central differences.
+            // This gives a smooth angle estimate that is not biased toward
+            // either the forward or backward segment alone.
+            float[] gradeAngle = new float[pts.Count];
             for (int i = 0; i < pts.Count; i++)
             {
-                float hw2 = steepZoneWindowMeters*0.5f, hMin = smoothH[i], hMax = smoothH[i];
+                int prev = Mathf.Max(0, i - 1);
+                int next = Mathf.Min(pts.Count - 1, i + 1);
+                float hd = HorizDist(pts[prev], pts[next]);
+                float dh = smoothH[next] - smoothH[prev];
+                gradeAngle[i] = hd > 0.001f
+                    ? Mathf.Atan2(dh, hd) * Mathf.Rad2Deg
+                    : 0f;
+            }
+
+            // Detect transition weight at each point — how much the grade
+            // angle changes relative to its neighbours.  Only points where
+            // the grade change exceeds the threshold get smoothed.
+            // Consistent slopes (steady climb or steady descent) register
+            // near-zero change and are left completely untouched.
+            float[] transWeight = new float[pts.Count];
+            for (int i = 1; i < pts.Count - 1; i++)
+            {
+                float angleDelta = Mathf.Abs(gradeAngle[i + 1] - gradeAngle[i - 1]) * 0.5f;
+                transWeight[i] = Mathf.Clamp01(
+                    (angleDelta - transitionAngleThreshold) / transitionAngleThreshold);
+            }
+
+            // Spread transition weight outward by transitionSmoothRadius so
+            // the smoothing kernel covers the full run-in and run-out zone
+            // around each transition point, not just the point itself.
+            float[] spreadWeight = new float[pts.Count];
+            float sig2spread = 2f * (transitionSmoothRadius * 0.5f)
+                                       * (transitionSmoothRadius * 0.5f);
+            for (int i = 0; i < pts.Count; i++)
+            {
+                float maxW = 0f;
                 for (int j = 0; j < pts.Count; j++)
                 {
-                    if (Mathf.Abs(arc[j]-arc[i]) > hw2) continue;
-                    if (smoothH[j] < hMin) hMin = smoothH[j];
-                    if (smoothH[j] > hMax) hMax = smoothH[j];
+                    if (transWeight[j] < 0.001f) continue;
+                    float dist = Mathf.Abs(arc[j] - arc[i]);
+                    if (dist > transitionSmoothRadius) continue;
+                    float w = transWeight[j] * Mathf.Exp(-(dist * dist) / sig2spread);
+                    if (w > maxW) maxW = w;
                 }
-                sw2[i] = Mathf.Clamp01(((hMax-hMin)/Mathf.Max(0.001f,allowed) - 1f)*0.5f);
+                spreadWeight[i] = maxW;
             }
-            float kR = steepZoneWindowMeters*0.25f;
-            for (int pass = 0; pass < steepZoneExtraPasses; pass++)
+
+            // Gaussian smoothing passes weighted by spreadWeight.
+            // Points with zero spread weight are skipped entirely so steady
+            // slopes are never touched regardless of pass count.
+            float sig2smooth = 2f * (transitionSmoothRadius * 0.4f)
+                                   * (transitionSmoothRadius * 0.4f);
+            for (int pass = 0; pass < transitionSmoothPasses; pass++)
             {
                 float[] next = new float[pts.Count];
                 for (int i = 0; i < pts.Count; i++)
                 {
-                    if (sw2[i] < 0.001f) { next[i] = smoothH[i]; continue; }
+                    if (spreadWeight[i] < 0.001f) { next[i] = smoothH[i]; continue; }
                     float ws = 0f, hs = 0f;
                     for (int j = 0; j < pts.Count; j++)
                     {
-                        float dist = Mathf.Abs(arc[j]-arc[i]);
-                        if (dist > kR) continue;
-                        float sig = kR*0.5f, w = Mathf.Exp(-(dist*dist)/(2f*sig*sig));
-                        ws += w; hs += smoothH[j]*w;
+                        float dist = Mathf.Abs(arc[j] - arc[i]);
+                        if (dist > transitionSmoothRadius) continue;
+                        float w = Mathf.Exp(-(dist * dist) / sig2smooth);
+                        ws += w; hs += smoothH[j] * w;
                     }
-                    next[i] = Mathf.Lerp(smoothH[i], ws>0.0001f?hs/ws:smoothH[i], sw2[i]);
+                    float smoothed = ws > 0.0001f ? hs / ws : smoothH[i];
+                    next[i] = Mathf.Lerp(smoothH[i], smoothed, spreadWeight[i]);
                 }
                 System.Array.Copy(next, smoothH, pts.Count);
+
+                // Re-apply directional slope limits after each smoothing pass
+                // so the transition blend never creates a grade that exceeds
+                // either the uphill or downhill limit.
                 for (int i = 1; i < pts.Count; i++)
                 {
-                    float hd=HorizDist(pts[i-1],pts[i]); if(hd<0.001f) continue;
-                    float md=hd*maxTan, d=smoothH[i]-smoothH[i-1];
-                    if(Mathf.Abs(d)>md) smoothH[i]=smoothH[i-1]+Mathf.Sign(d)*md;
+                    float hd = HorizDist(pts[i - 1], pts[i]); if (hd < 0.001f) continue;
+                    float d = smoothH[i] - smoothH[i - 1];
+                    float md = hd * (d > 0f ? maxUphillTan : maxDownhillTan);
+                    if (Mathf.Abs(d) > md) smoothH[i] = smoothH[i - 1] + Mathf.Sign(d) * md;
                 }
-                for (int i = pts.Count-2; i >= 0; i--)
+                for (int i = pts.Count - 2; i >= 0; i--)
                 {
-                    float hd=HorizDist(pts[i],pts[i+1]); if(hd<0.001f) continue;
-                    float md=hd*maxTan, d=smoothH[i]-smoothH[i+1];
-                    if(Mathf.Abs(d)>md) smoothH[i]=smoothH[i+1]+Mathf.Sign(d)*md;
+                    float hd = HorizDist(pts[i], pts[i + 1]); if (hd < 0.001f) continue;
+                    float d = smoothH[i] - smoothH[i + 1];
+                    float md = hd * (d < 0f ? maxUphillTan : maxDownhillTan);
+                    if (Mathf.Abs(d) > md) smoothH[i] = smoothH[i + 1] + Mathf.Sign(d) * md;
                 }
             }
         }
@@ -968,6 +1214,121 @@ public class RoadPathGenerator : ModBehaviour
         td.SetHeights(pxMin, pzMin, heights);
         for (int i = 0; i < pts.Count; i++) { Vector3 p=pts[i]; p.y=smoothH[i]; pts[i]=p; }
         postFlattenH = smoothH;
+    }
+
+    // ─────────────────────────────────────────────────────────
+    //  Terrain – Narrow Road Surface Re-flatten
+    // ─────────────────────────────────────────────────────────
+    //  Runs after Ridge Cap to restore the cambered road bed within
+    //  roadWidth only.  No flattenExtraWidth, no falloff zone, no
+    //  steep-zone extra passes — just a clean overwrite of the inner
+    //  corridor to the slope-limited centreline heights that Flatten
+    //  originally computed.  This corrects any inward bell disturbance
+    //  Ridge Cap wrote onto the road surface without touching the
+    //  shoulder, berm, or ditch zones.
+
+    void ReflattenRoadSurface(List<Vector3> pts, float[] smoothH)
+    {
+        if (smoothH == null || smoothH.Length != pts.Count) return;
+        Terrain terrain = Terrain.activeTerrain;
+        if (terrain == null) return;
+
+        TerrainData td = terrain.terrainData;
+        int hw = td.heightmapResolution;
+        float terrainW = td.size.x, terrainH = td.size.z, terrainMaxY = td.size.y;
+        Vector3 terrainPos = terrain.transform.position;
+
+        float halfRoad = roadWidth * 0.5f;
+        float cSlope = Mathf.Sin(camberDegrees * Mathf.Deg2Rad);
+
+        float minX = float.MaxValue, maxX = float.MinValue, minZ = float.MaxValue, maxZ = float.MinValue;
+        foreach (Vector3 p in pts)
+        {
+            if (p.x - halfRoad < minX) minX = p.x - halfRoad; if (p.x + halfRoad > maxX) maxX = p.x + halfRoad;
+            if (p.z - halfRoad < minZ) minZ = p.z - halfRoad; if (p.z + halfRoad > maxZ) maxZ = p.z + halfRoad;
+        }
+        int pxMin = Mathf.Clamp(Mathf.FloorToInt(((minX - terrainPos.x) / terrainW) * (hw - 1)), 0, hw - 1);
+        int pxMax = Mathf.Clamp(Mathf.CeilToInt(((maxX - terrainPos.x) / terrainW) * (hw - 1)), 0, hw - 1);
+        int pzMin = Mathf.Clamp(Mathf.FloorToInt(((minZ - terrainPos.z) / terrainH) * (hw - 1)), 0, hw - 1);
+        int pzMax = Mathf.Clamp(Mathf.CeilToInt(((maxZ - terrainPos.z) / terrainH) * (hw - 1)), 0, hw - 1);
+        int subW = pxMax - pxMin + 1, subH = pzMax - pzMin + 1;
+        float[,] heights = td.GetHeights(pxMin, pzMin, subW, subH);
+
+        for (int lz = 0; lz < subH; lz++)
+            for (int lx = 0; lx < subW; lx++)
+            {
+                float wx = terrainPos.x + ((pxMin + lx) / (float)(hw - 1)) * terrainW;
+                float wz = terrainPos.z + ((pzMin + lz) / (float)(hw - 1)) * terrainH;
+                float interpH, sc;
+                float cd = ClosestPointOnSplineXZ(wx, wz, pts, smoothH, out interpH, out sc);
+                // Strictly inside the road corridor only — no falloff
+                if (cd > halfRoad) continue;
+                float target = interpH - cSlope * sc;
+                heights[lz, lx] = Mathf.Clamp01((target - terrainPos.y) / terrainMaxY);
+            }
+
+        td.SetHeights(pxMin, pzMin, heights);
+    }
+
+    // ─────────────────────────────────────────────────────────
+    //  Terrain – Flatten Beyond Path Width
+    // ─────────────────────────────────────────────────────────
+    //  Flattens terrain from the road edge outward by flattenBeyondDistance
+    //  on both sides, using the slope-limited centreline heights as the
+    //  target elevation.  Runs before Berm, Ditch, and Shoulder Smoothing
+    //  so those operations have a clean flat base to work from.
+    //  A short falloff at the outer boundary blends back to natural terrain
+    //  to avoid a hard seam at the edge of the flattened zone.
+
+    void FlattenBeyondPathWidth(List<Vector3> pts, float[] smoothH)
+    {
+        if (smoothH == null || smoothH.Length != pts.Count) return;
+        Terrain terrain = Terrain.activeTerrain;
+        if (terrain == null) return;
+
+        TerrainData td = terrain.terrainData;
+        int hw = td.heightmapResolution;
+        float terrainW = td.size.x, terrainH = td.size.z, terrainMaxY = td.size.y;
+        Vector3 terrainPos = terrain.transform.position;
+
+        float halfRoad = roadWidth * 0.5f;
+        float outerEdge = halfRoad + flattenBeyondDistance;
+        // Short falloff at outer boundary to blend back to natural terrain
+        float falloff = Mathf.Min(2f, flattenBeyondDistance * 0.2f);
+        float fadeStart = outerEdge - falloff;
+        float cSlope = Mathf.Sin(camberDegrees * Mathf.Deg2Rad);
+
+        float minX = float.MaxValue, maxX = float.MinValue, minZ = float.MaxValue, maxZ = float.MinValue;
+        foreach (Vector3 p in pts)
+        {
+            if (p.x - outerEdge < minX) minX = p.x - outerEdge; if (p.x + outerEdge > maxX) maxX = p.x + outerEdge;
+            if (p.z - outerEdge < minZ) minZ = p.z - outerEdge; if (p.z + outerEdge > maxZ) maxZ = p.z + outerEdge;
+        }
+        int pxMin = Mathf.Clamp(Mathf.FloorToInt(((minX - terrainPos.x) / terrainW) * (hw - 1)), 0, hw - 1);
+        int pxMax = Mathf.Clamp(Mathf.CeilToInt(((maxX - terrainPos.x) / terrainW) * (hw - 1)), 0, hw - 1);
+        int pzMin = Mathf.Clamp(Mathf.FloorToInt(((minZ - terrainPos.z) / terrainH) * (hw - 1)), 0, hw - 1);
+        int pzMax = Mathf.Clamp(Mathf.CeilToInt(((maxZ - terrainPos.z) / terrainH) * (hw - 1)), 0, hw - 1);
+        int subW = pxMax - pxMin + 1, subH = pzMax - pzMin + 1;
+        float[,] heights = td.GetHeights(pxMin, pzMin, subW, subH);
+
+        for (int lz = 0; lz < subH; lz++)
+            for (int lx = 0; lx < subW; lx++)
+            {
+                float wx = terrainPos.x + ((pxMin + lx) / (float)(hw - 1)) * terrainW;
+                float wz = terrainPos.z + ((pzMin + lz) / (float)(hw - 1)) * terrainH;
+                float interpH, sc;
+                float cd = ClosestPointOnSplineXZ(wx, wz, pts, smoothH, out interpH, out sc);
+                // Only operate in the band beyond the road edge
+                if (cd <= halfRoad || cd > outerEdge) continue;
+                float target = interpH - cSlope * Mathf.Clamp(sc, -halfRoad, halfRoad);
+                float blend = (cd <= fadeStart) ? 1f
+                               : (falloff > 0.001f ? 1f - (cd - fadeStart) / falloff : 0f);
+                blend = Mathf.Clamp01(blend);
+                heights[lz, lx] = Mathf.Lerp(heights[lz, lx],
+                                   Mathf.Clamp01((target - terrainPos.y) / terrainMaxY), blend);
+            }
+
+        td.SetHeights(pxMin, pzMin, heights);
     }
 
     // ─────────────────────────────────────────────────────────
@@ -1227,7 +1588,14 @@ public class RoadPathGenerator : ModBehaviour
 
         float halfRoad   = roadWidth*0.5f;
         float innerStart = halfRoad - Mathf.Max(0f, shoulderSmoothInwardOverlap);
-        float outerEnd   = halfRoad + shoulderSmoothDistance;
+        // Clamp the shoulder smooth outer edge to the ditch zone start when
+        // a ditch is active.  Without this, a large shoulderSmoothDistance
+        // bleeds into the ditch zone and the Gaussian passes pull the freshly
+        // carved walls upward, partially undoing the ditch carve.
+        float ditchZoneStart = halfRoad + ditchOffset;
+        float outerEnd = (generateDitch)
+            ? Mathf.Min(halfRoad + shoulderSmoothDistance, ditchZoneStart)
+            : halfRoad + shoulderSmoothDistance;
         float padded     = outerEnd + shoulderSmoothRadius;
 
         float minX=float.MaxValue,maxX=float.MinValue,minZ=float.MaxValue,maxZ=float.MinValue;
