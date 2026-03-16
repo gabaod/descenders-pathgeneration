@@ -2075,33 +2075,170 @@ public class RoadPathGenerator : ModBehaviour
     {
         if (controlPoints == null || controlPoints.Count < 2) return;
         var cp = new List<Vector3>();
-        foreach (Transform t in controlPoints) if(t!=null) cp.Add(t.position);
+        foreach (Transform t in controlPoints) if (t != null) cp.Add(t.position);
         if (closedLoop && cp.Count > 2) cp.Add(cp[0]);
 
-        Gizmos.color = new Color(1f,0.8f,0.1f,1f);
-        foreach (Transform t in controlPoints) if(t!=null) Gizmos.DrawWireSphere(t.position,0.4f);
-        Color ec = new Color(1f,0.3f,0.3f,0.7f);
+        // Control point spheres
+        Gizmos.color = new Color(1f, 0.8f, 0.1f, 1f);
+        foreach (Transform t in controlPoints) if (t != null) Gizmos.DrawWireSphere(t.position, 0.4f);
+
+        // ── Colour key ────────────────────────────────────────
+        // Cyan        — centreline
+        // Red         — road edges
+        // Orange      — flatten extra width
+        // Yellow      — flatten falloff outer / flatten beyond path outer
+        // Green       — berm slope outer
+        // Light green — berm outer falloff toe
+        // Blue        — ditch inner wall top
+        // Cornflower  — ditch floor start
+        // Purple      — ditch floor end
+        // Magenta     — ditch outer wall toe
+        // White       — shoulder smooth outer
+        // Pink        — ridge cap zone inner / outer
+        // Teal        — curb outer edge
+
+        Color cCentre = new Color(0.2f, 0.9f, 1.0f, 1.0f);
+        Color cRoadEdge = new Color(1.0f, 0.3f, 0.3f, 0.8f);
+        Color cFlattenExtra = new Color(1.0f, 0.6f, 0.1f, 0.7f);
+        Color cFlattenFallof = new Color(1.0f, 1.0f, 0.1f, 0.6f);
+        Color cBeyondPath = new Color(0.9f, 0.9f, 0.0f, 0.6f);
+        Color cBermOuter = new Color(0.2f, 0.9f, 0.2f, 0.7f);
+        Color cBermToe = new Color(0.6f, 1.0f, 0.4f, 0.6f);
+        Color cDitchInner = new Color(0.3f, 0.5f, 1.0f, 0.8f);
+        Color cDitchFloorS = new Color(0.5f, 0.7f, 1.0f, 0.7f);
+        Color cDitchFloorE = new Color(0.7f, 0.4f, 1.0f, 0.7f);
+        Color cDitchOuter = new Color(1.0f, 0.2f, 1.0f, 0.8f);
+        Color cShoulder = new Color(1.0f, 1.0f, 1.0f, 0.6f);
+        Color cRidgeCap = new Color(1.0f, 0.6f, 0.8f, 0.7f);
+        Color cCurb = new Color(0.2f, 0.9f, 0.8f, 0.7f);
+
+        // Pre-compute all the half-widths once
+        float halfRoad = roadWidth * 0.5f;
+        float flatExtraEdge = halfRoad + flattenExtraWidth;
+        float flatFallofEdge = flatExtraEdge + flattenFalloff;
+        float beyondEdge = halfRoad + flattenBeyondDistance;
+        float bermOuterEdge = halfRoad + bermSlopeDistance;
+        float bermToeEdge = bermOuterEdge + bermOuterFalloff;
+        float ditchInnerTop = halfRoad + ditchOffset;
+        float ditchFloorS = ditchInnerTop + ditchInnerWidth;
+        float ditchFloorE = ditchFloorS + ditchBottomWidth;
+        float ditchOuterToe = ditchFloorE + ditchOuterWidth;
+        float shoulderOuter = halfRoad + shoulderSmoothDistance;
+        float ridgeCapInner = Mathf.Max(0f, halfRoad - ridgeCapWidth);
+        float ridgeCapOuter = halfRoad + ridgeCapWidth;
+        float curbOuter = halfRoad + curbWidth;
 
         // Draw at terrainSplineSubdivision density so edge gizmo lines match
         // what the terrain operations actually project onto — gives an accurate
         // preview of where the road edge / ditch / berm will land.
         int gizmoSubdiv = segmentsPerCurve * Mathf.Max(1, terrainSplineSubdivision);
 
-        for (int i=0;i<cp.Count-1;i++)
+        for (int i = 0; i < cp.Count - 1; i++)
         {
-            Vector3 p0=cp[Mathf.Max(0,i-1)],p1=cp[i];
-            Vector3 p2=cp[Mathf.Min(cp.Count-1,i+1)],p3=cp[Mathf.Min(cp.Count-1,i+2)];
-            Vector3 prev=CatmullRom(p0,p1,p2,p3,0f);
-            for (int s=1;s<=gizmoSubdiv;s++)
+            Vector3 p0 = cp[Mathf.Max(0, i - 1)], p1 = cp[i];
+            Vector3 p2 = cp[Mathf.Min(cp.Count - 1, i + 1)], p3 = cp[Mathf.Min(cp.Count - 1, i + 2)];
+            Vector3 prev = CatmullRom(p0, p1, p2, p3, 0f);
+
+            for (int s = 1; s <= gizmoSubdiv; s++)
             {
-                float t = s / (float)gizmoSubdiv;
-                Vector3 cur=CatmullRom(p0,p1,p2,p3,t);
-                Gizmos.color=new Color(0.2f,0.9f,1f,1f); Gizmos.DrawLine(prev,cur);
-                Vector3 fwd=(cur-prev).normalized, right=Vector3.Cross(Vector3.up,fwd).normalized;
-                Gizmos.color=ec;
-                Gizmos.DrawLine(prev-right*(roadWidth*0.5f),cur-right*(roadWidth*0.5f));
-                Gizmos.DrawLine(prev+right*(roadWidth*0.5f),cur+right*(roadWidth*0.5f));
-                prev=cur;
+                float tN = s / (float)gizmoSubdiv;
+                Vector3 cur = CatmullRom(p0, p1, p2, p3, tN);
+                Vector3 fwd = (cur - prev).normalized;
+                Vector3 right = Vector3.Cross(Vector3.up, fwd).normalized;
+
+                // ── Centreline ────────────────────────────────
+                Gizmos.color = cCentre;
+                Gizmos.DrawLine(prev, cur);
+
+                // ── Road edges ────────────────────────────────
+                Gizmos.color = cRoadEdge;
+                Gizmos.DrawLine(prev - right * halfRoad, cur - right * halfRoad);
+                Gizmos.DrawLine(prev + right * halfRoad, cur + right * halfRoad);
+
+                // ── Curb outer edge ───────────────────────────
+                if (generateCurbs)
+                {
+                    Gizmos.color = cCurb;
+                    Gizmos.DrawLine(prev - right * curbOuter, cur - right * curbOuter);
+                    Gizmos.DrawLine(prev + right * curbOuter, cur + right * curbOuter);
+                }
+
+                // ── Flatten extra width ───────────────────────
+                if (flattenTerrain)
+                {
+                    Gizmos.color = cFlattenExtra;
+                    Gizmos.DrawLine(prev - right * flatExtraEdge, cur - right * flatExtraEdge);
+                    Gizmos.DrawLine(prev + right * flatExtraEdge, cur + right * flatExtraEdge);
+
+                    // Flatten falloff outer boundary
+                    Gizmos.color = cFlattenFallof;
+                    Gizmos.DrawLine(prev - right * flatFallofEdge, cur - right * flatFallofEdge);
+                    Gizmos.DrawLine(prev + right * flatFallofEdge, cur + right * flatFallofEdge);
+                }
+
+                // ── Flatten beyond path ───────────────────────
+                if (flattenBeyondPath)
+                {
+                    Gizmos.color = cBeyondPath;
+                    Gizmos.DrawLine(prev - right * beyondEdge, cur - right * beyondEdge);
+                    Gizmos.DrawLine(prev + right * beyondEdge, cur + right * beyondEdge);
+                }
+
+                // ── Ridge cap inner / outer ───────────────────
+                if (applyRidgeCap && Mathf.Abs(camberDegrees) > 0.1f)
+                {
+                    Gizmos.color = cRidgeCap;
+                    Gizmos.DrawLine(prev - right * ridgeCapInner, cur - right * ridgeCapInner);
+                    Gizmos.DrawLine(prev + right * ridgeCapInner, cur + right * ridgeCapInner);
+                    Gizmos.DrawLine(prev - right * ridgeCapOuter, cur - right * ridgeCapOuter);
+                    Gizmos.DrawLine(prev + right * ridgeCapOuter, cur + right * ridgeCapOuter);
+                }
+
+                // ── Berm outer slope / toe ────────────────────
+                if (generateBerm)
+                {
+                    Gizmos.color = cBermOuter;
+                    Gizmos.DrawLine(prev - right * bermOuterEdge, cur - right * bermOuterEdge);
+                    Gizmos.DrawLine(prev + right * bermOuterEdge, cur + right * bermOuterEdge);
+
+                    Gizmos.color = cBermToe;
+                    Gizmos.DrawLine(prev - right * bermToeEdge, cur - right * bermToeEdge);
+                    Gizmos.DrawLine(prev + right * bermToeEdge, cur + right * bermToeEdge);
+                }
+
+                // ── Ditch zones ───────────────────────────────
+                if (generateDitch)
+                {
+                    // Inner wall top
+                    Gizmos.color = cDitchInner;
+                    Gizmos.DrawLine(prev - right * ditchInnerTop, cur - right * ditchInnerTop);
+                    Gizmos.DrawLine(prev + right * ditchInnerTop, cur + right * ditchInnerTop);
+
+                    // Floor start
+                    Gizmos.color = cDitchFloorS;
+                    Gizmos.DrawLine(prev - right * ditchFloorS, cur - right * ditchFloorS);
+                    Gizmos.DrawLine(prev + right * ditchFloorS, cur + right * ditchFloorS);
+
+                    // Floor end
+                    Gizmos.color = cDitchFloorE;
+                    Gizmos.DrawLine(prev - right * ditchFloorE, cur - right * ditchFloorE);
+                    Gizmos.DrawLine(prev + right * ditchFloorE, cur + right * ditchFloorE);
+
+                    // Outer wall toe
+                    Gizmos.color = cDitchOuter;
+                    Gizmos.DrawLine(prev - right * ditchOuterToe, cur - right * ditchOuterToe);
+                    Gizmos.DrawLine(prev + right * ditchOuterToe, cur + right * ditchOuterToe);
+                }
+
+                // ── Shoulder smooth outer ─────────────────────
+                if (smoothShoulder)
+                {
+                    Gizmos.color = cShoulder;
+                    Gizmos.DrawLine(prev - right * shoulderOuter, cur - right * shoulderOuter);
+                    Gizmos.DrawLine(prev + right * shoulderOuter, cur + right * shoulderOuter);
+                }
+
+                prev = cur;
             }
         }
     }
