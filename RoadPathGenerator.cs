@@ -2690,9 +2690,13 @@ public class RoadPathGenerator : ModBehaviour
                 float origH;
                 if (bermUseOriginalTerrain && savedH != null)
                 {
-                    int px = Mathf.Clamp(pxMin + lx, 0, hw - 1);
-                    int pz = Mathf.Clamp(pzMin + lz, 0, hw - 1);
-                    origH = savedH[pz, px] * tMaxY + tPos.y;
+                    int absPx = Mathf.Clamp(pxMin + lx, 0, hw - 1);
+                    int absPz = Mathf.Clamp(pzMin + lz, 0, hw - 1);
+                    int relPx = Mathf.Clamp(absPx - _savedHeightsPxMin,
+                                0, _savedHeightsSubW - 1);
+                    int relPz = Mathf.Clamp(absPz - _savedHeightsPzMin,
+                                0, _savedHeightsSubH - 1);
+                    origH = savedH[relPz, relPx] * tMaxY + tPos.y;
                 }
                 else
                 {
