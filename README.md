@@ -19,3 +19,4 @@ Gizmo color key <br>
         // White       — shoulder smooth outer<br>
         // Pink        — ridge cap zone inner / outer<br>
         // Teal        — curb outer edge<br>
+        // Dashed line - Shows the full boundary of what part of terrain heightmap will be adjusted.
