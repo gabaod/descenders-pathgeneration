@@ -1057,6 +1057,12 @@ public class RoadPathGenerator : ModBehaviour
                 _meshCollider.sharedMesh = BuildCollisionMesh(_cachedSplinePoints,
                                                               _splineStyleIndices);
         }
+        // 11. Rock scatter — editor only, places prefabs in shoulder
+        // zone as children of a RockScatter container GameObject.
+#if UNITY_EDITOR
+        if (enableRockScatter && !_skipTerrainShaping)
+            ScatterRocks();            ScatterRocks();
+#endif
     }
 
     public void ClearRoad()
@@ -1064,6 +1070,14 @@ public class RoadPathGenerator : ModBehaviour
         if (_meshFilter != null) _meshFilter.sharedMesh = null;
         if (_meshCollider != null) _meshCollider.sharedMesh = null;
 #if UNITY_EDITOR
+        // Destroy rock scatter container and all children
+        Transform existing = transform.Find("RockScatter");
+        if (existing != null)
+            UnityEditor.EditorApplication.delayCall += () =>
+            {
+                if (existing != null)
+                    DestroyImmediate(existing.gameObject);
+            };
         RestoreTerrain();
         _terrainSnapshotTaken = false;
         _savedHeightsFlat = null; _savedHeightsRes   = 0;
@@ -4009,8 +4023,232 @@ public class RoadPathGenerator : ModBehaviour
     }
 
     // ─────────────────────────────────────────────────────────
+    //  Rock Scatter
+    //  Places prefabs from rockScatterPrefabs in the shoulder
+    //  zone between ditch outer toe and berm start.
+    //  Editor only — rocks are real scene GameObjects that
+    //  persist into the exported build via scene save.
+    //
+    //  Uses a grid-based placement approach for performance:
+    //  zone divided into cells sized to rockScatterMinSpacing,
+    //  one attempt per cell with random offset, overlap checked
+    //  against neighbouring cells only — no global search.
+    // ─────────────────────────────────────────────────────────
+
+#if UNITY_EDITOR
+    void ScatterRocks()
+    {
+        if (rockScatterPrefabs == null || rockScatterPrefabs.Count == 0) return;
+        if (_distField == null) return;
+        Terrain terrain = Terrain.activeTerrain;
+        if (terrain == null) return;
+
+        // ── Zone boundaries ───────────────────────────────────
+        float halfRoad      = roadWidth * 0.5f;
+        float ditchFloorEnd = halfRoad + ditchOffset
+                              + ditchInnerWidth + ditchBottomWidth;
+        float ditchOuterToe = ditchFloorEnd + ditchOuterWidth;
+
+        float zoneInner = generateDitch
+            ? ditchOuterToe
+            : halfRoad + shoulderSmoothDistance;
+
+        // Berm start — same calculation as ApplyBermToTerrain
+        float shoulderOuter = generateDitch
+            ? ditchFloorEnd + shoulderSmoothDistance
+            : halfRoad + shoulderSmoothDistance;
+
+        float bermStart = (generateDitch && smoothShoulder)
+            ? shoulderOuter
+            : generateDitch   ? ditchFloorEnd
+            : smoothShoulder  ? shoulderOuter
+            : halfRoad;
+
+        float zoneOuter = generateBerm
+            ? bermStart + bermSlopeDistance + bermOuterFalloff
+            : zoneInner + 5f;
+
+        if (zoneOuter <= zoneInner)
+        {
+            Debug.LogWarning("[RoadPathGenerator] Rock scatter: " +
+                "zoneOuter <= zoneInner — no valid scatter zone. " +
+                "Check berm, ditch and shoulder settings.");
+            return;
+        }
+
+        // ── Endpoint tangents for end-cap rejection ───────────
+        List<Vector3> pts = _cachedSplinePoints;
+        if (pts == null || pts.Count < 2) return;
+        Vector2 startTangent = new Vector2(
+            pts[1].x - pts[0].x, pts[1].z - pts[0].z).normalized;
+        Vector2 startOrigin  = new Vector2(pts[0].x, pts[0].z);
+        int     lastIdx      = pts.Count - 1;
+        Vector2 endTangent   = new Vector2(
+            pts[lastIdx].x - pts[lastIdx-1].x,
+            pts[lastIdx].z - pts[lastIdx-1].z).normalized;
+        Vector2 endOrigin    = new Vector2(pts[lastIdx].x, pts[lastIdx].z);
+
+        // ── Create or clear container ─────────────────────────
+        Transform container = transform.Find("RockScatter");
+        if (container == null)
+        {
+            GameObject go = new GameObject("RockScatter");
+            go.transform.SetParent(transform, false);
+            container = go.transform;
+        }
+
+        // ── Grid setup ────────────────────────────────────────
+        float cellSize = rockScatterMinSpacing;
+        System.Random rng = new System.Random(rockScatterSeed);
+
+        TerrainData td   = terrain.terrainData;
+        float tW         = td.size.x, tH = td.size.z;
+        Vector3 tPos     = terrain.transform.position;
+        int hw           = td.heightmapResolution;
+
+        // Build candidate cells from distance field pixels
+        // that fall within the shoulder zone
+        Dictionary<int, Vector3> placedCells =
+            new Dictionary<int, Vector3>();
+
+        for (int lz = 0; lz < _distField.subH; lz++)
+        for (int lx = 0; lx < _distField.subW; lx++)
+        {
+            int   idx = _distField.Idx(lz, lx);
+            float cd  = _distField.crossDist[idx];
+            if (cd < zoneInner || cd > zoneOuter) continue;
+
+            float wx = tPos.x + ((_distField.pxMin+lx)/(float)(hw-1))*tW;
+            float wz = tPos.z + ((_distField.pzMin+lz)/(float)(hw-1))*tH;
+
+            // End-cap rejection
+            Vector2 pq = new Vector2(wx, wz);
+            if (Vector2.Dot(pq - startOrigin, startTangent) < 0f) continue;
+            if (Vector2.Dot(pq - endOrigin,   endTangent)   > 0f) continue;
+
+            // Density check — skip cell based on density setting
+            if (rng.NextDouble() > rockScatterDensity * cellSize * cellSize)
+                continue;
+
+            // Add random offset within cell
+            float ox = (float)(rng.NextDouble() - 0.5) * cellSize;
+            float oz = (float)(rng.NextDouble() - 0.5) * cellSize;
+            float px = wx + ox;
+            float pz = wz + oz;
+
+            // Grid cell key for overlap check
+            int cx = Mathf.FloorToInt(px / cellSize);
+            int cz = Mathf.FloorToInt(pz / cellSize);
+            int key = cx * 100000 + cz;
+
+            // Check neighbouring cells for minimum spacing
+            bool tooClose = false;
+            for (int nx = cx-1; nx <= cx+1 && !tooClose; nx++)
+            for (int nz = cz-1; nz <= cz+1 && !tooClose; nz++)
+            {
+                int nkey = nx * 100000 + nz;
+                if (placedCells.ContainsKey(nkey))
+                {
+                    Vector3 other = placedCells[nkey];
+                    float dx = other.x - px;
+                    float dz2 = other.z - pz;
+                    float minSpacingSq = rockScatterMinSpacing * rockScatterMinSpacing;
+                    if (dx*dx + dz2*dz2 < minSpacingSq)
+                        tooClose = true;
+                }
+            }
+            if (tooClose) continue;
+
+            // ── Place rock ────────────────────────────────────
+            float py = SampleTerrainHeight(
+                new Vector3(px, 0f, pz), terrain);
+
+            // Pick random prefab
+            int prefabIdx = rng.Next(0, rockScatterPrefabs.Count);
+            RockScatterEntry entry = rockScatterPrefabs[prefabIdx];
+            if (entry == null || entry.prefab == null) continue;
+
+            // Random scale
+            float scale = Mathf.Lerp(rockScatterMinScale,
+                rockScatterMaxScale, (float)rng.NextDouble());
+
+            // Random Y rotation
+            float rotY = Mathf.Lerp(rockScatterMinRotY,
+                rockScatterMaxRotY, (float)rng.NextDouble());
+
+            // Random XZ tilt
+            float tiltX = (float)(rng.NextDouble() - 0.5) * 2f
+                          * rockScatterMaxTilt;
+            float tiltZ = (float)(rng.NextDouble() - 0.5) * 2f
+                          * rockScatterMaxTilt;
+
+            Quaternion rot = Quaternion.Euler(tiltX, rotY, tiltZ);
+
+            // Align to slope if enabled
+            if (rockScatterAlignToSlope)
+            {
+                Vector3 normal = terrain.terrainData
+                    .GetInterpolatedNormal(
+                        (px - tPos.x) / tW,
+                        (pz - tPos.z) / tH);
+                Quaternion slopeRot = Quaternion.FromToRotation(
+                    Vector3.up, normal);
+                rot = slopeRot * Quaternion.Euler(
+                    tiltX, rotY, tiltZ);
+            }
+
+            GameObject rock = (GameObject)
+                UnityEditor.PrefabUtility.InstantiatePrefab(
+                    entry.prefab);
+            rock.transform.SetParent(container, true);
+            rock.transform.position   =
+                new Vector3(px, py, pz);
+            rock.transform.rotation   = rot;
+            rock.transform.localScale =
+                Vector3.one * scale;
+
+            // Add mesh collider if requested
+            if (entry.addMeshCollider)
+            {
+                MeshFilter mf =
+                    rock.GetComponentInChildren<MeshFilter>();
+                if (mf != null)
+                {
+                    MeshCollider mc =
+                        rock.AddComponent<MeshCollider>();
+                    mc.sharedMesh = mf.sharedMesh;
+                }
+            }
+
+            placedCells[key] = new Vector3(px, py, pz);
+        }
+
+        Debug.Log("[RoadPathGenerator] Scattered " +
+                  container.childCount + " rocks.");
+    }
+#endif
+
+    // ─────────────────────────────────────────────────────────
     //  Gizmos
     // ─────────────────────────────────────────────────────────
+    static void DrawDashedLineGizmo(Vector3 a, Vector3 b,
+                        float dashLen, float gapLen)
+    {
+        float total = Vector3.Distance(a, b);
+        if (total < 0.001f) return;
+        Vector3 dir = (b - a) / total;
+        float used = 0f;
+        bool dash = true;
+        while (used < total)
+        {
+            float seg = Mathf.Min(dash ? dashLen : gapLen, total - used);
+            Vector3 s = a + dir * used;
+            Vector3 e = a + dir * (used + seg);
+            if (dash) Gizmos.DrawLine(s, e);
+            used += seg;
+            dash = !dash;
+        }
+    }
 
     void OnDrawGizmos()
     {
@@ -4194,6 +4432,53 @@ public class RoadPathGenerator : ModBehaviour
 
                 prev = cur;
             }
+        }
+
+        // ── Snapshot boundary ─────────────────────────────────
+        // Shows the exact rectangle that will be saved/restored.
+        // Drawn as a dashed white box at terrain height.
+        Terrain snapTerrain = Terrain.activeTerrain;
+        if (controlPoints != null && controlPoints.Count >= 2)
+        {
+            float snapRadius = (roadWidth * 0.5f
+                + Mathf.Max(bermSlopeDistance + bermOuterFalloff,
+                            ditchOffset + ditchInnerWidth + ditchBottomWidth
+                            + ditchOuterWidth + shoulderSmoothDistance))
+                * 1.5f;
+
+            float sMinX = float.MaxValue, sMaxX = float.MinValue;
+            float sMinZ = float.MaxValue, sMaxZ = float.MinValue;
+            foreach (Transform t in controlPoints)
+            {
+                if (t == null) continue;
+                if (t.position.x - snapRadius < sMinX)
+                    sMinX = t.position.x - snapRadius;
+                if (t.position.x + snapRadius > sMaxX)
+                    sMaxX = t.position.x + snapRadius;
+                if (t.position.z - snapRadius < sMinZ)
+                    sMinZ = t.position.z - snapRadius;
+                if (t.position.z + snapRadius > sMaxZ)
+                    sMaxZ = t.position.z + snapRadius;
+            }
+
+            float snapY = snapTerrain != null
+                ? snapTerrain.SampleHeight(new Vector3(
+                    (sMinX + sMaxX) * 0.5f, 0f,
+                    (sMinZ + sMaxZ) * 0.5f))
+                  + (snapTerrain != null
+                    ? snapTerrain.transform.position.y : 0f) + 0.5f
+                : 0f;
+
+            Vector3 snCornerA = new Vector3(sMinX, snapY, sMinZ);
+            Vector3 snCornerB = new Vector3(sMaxX, snapY, sMinZ);
+            Vector3 snCornerC = new Vector3(sMaxX, snapY, sMaxZ);
+            Vector3 snCornerD = new Vector3(sMinX, snapY, sMaxZ);
+
+            Gizmos.color = new Color(1f, 1f, 1f, 0.5f);
+            DrawDashedLineGizmo(snCornerA, snCornerB, 4f, 2f);
+            DrawDashedLineGizmo(snCornerB, snCornerC, 4f, 2f);
+            DrawDashedLineGizmo(snCornerC, snCornerD, 4f, 2f);
+            DrawDashedLineGizmo(snCornerD, snCornerA, 4f, 2f);
         }
 
         // ── Velocity Preview ──────────────────────────────────
