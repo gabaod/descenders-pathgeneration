@@ -198,7 +198,7 @@ public class RoadPathGenerator : ModBehaviour
     [Header("Road Geometry")]
     [Tooltip("Total width of the road surface in world units, measured edge to edge.")]
     [Range(0.5f, 50f)]
-    public float roadWidth = 10f;
+    public float roadWidth = 6f;
 
     [Tooltip("Thickness of the road mesh in world units.\n" +
              "Adds a bottom face to the road surface so it does not appear\n" +
@@ -252,7 +252,7 @@ public class RoadPathGenerator : ModBehaviour
     [Tooltip("Distance in world units from the road edge to where the berm slope\n" +
              "reaches natural terrain level.  Larger = gentler, wider embankment.")]
     [Range(0.5f, 40f)]
-    public float bermSlopeDistance = 25f;
+    public float bermSlopeDistance = 10f;
 
     [Tooltip("0 = linear slope, 1 = smooth S-curve.")]
     [Range(0f, 1f)]
@@ -260,8 +260,8 @@ public class RoadPathGenerator : ModBehaviour
 
     [Tooltip("Distance in world units over which the berm blends back to natural\n" +
              "terrain at its outer edge.  Prevents a hard seam at the berm toe.")]
-    [Range(0f, 10f)]
-    public float bermOuterFalloff = 1.5f;
+    [Range(0f, 30f)]
+    public float bermOuterFalloff = 10f;
 
     [Tooltip("When true, berm blends toward original pre-generate terrain heights\n" +
          "at its outer boundary — preserves the natural landscape shape.\n" +
@@ -332,12 +332,12 @@ public class RoadPathGenerator : ModBehaviour
     [Tooltip("Distance from the road edge to the top of the inner ditch wall (world units).\n" +
              "Set to bermSlopeDistance + bermOuterFalloff to start exactly at the berm toe.")]
     [Range(0f, 40f)]
-    public float ditchOffset = 2f;
+    public float ditchOffset = 1f;
 
     [Tooltip("Width of the slope descending INTO the ditch from the road / berm side (world units).\n" +
              "Larger = gentler grade down.  Smaller = steeper cut.")]
     [Range(0.5f, 20f)]
-    public float ditchInnerWidth = 6f;
+    public float ditchInnerWidth = 8f;
 
     [Tooltip("Width of the flat ditch floor (world units).\n" +
              "0  = V-ditch (inner and outer walls meet at a point).\n" +
@@ -348,13 +348,20 @@ public class RoadPathGenerator : ModBehaviour
     [Tooltip("Width of the slope climbing OUT of the ditch back to natural terrain (world units).\n" +
              "Larger = gentler grade up.  Usually >= ditchInnerWidth for a natural asymmetric look.")]
     [Range(0.5f, 20f)]
-    public float ditchOuterWidth = 6f;
+    public float ditchOuterWidth = 8f;
 
     [Tooltip("Maximum depth of the ditch floor below the terrain surface at the inner wall start (world units).\n" +
              "The bottom is cut this deep below whatever height the terrain already has at that point\n" +
              "(i.e. after flatten / berm have run), so the ditch always reads as a positive excavation.")]
     [Range(0.1f, 10f)]
-    public float ditchDepth = 6.0f;
+    public float ditchDepth = 3.0f;
+
+    [Tooltip("Height the outer ditch wall rises above the ditch floor in world units.\n" +
+         "0 = outer wall stays flat at floor level — creates a shelf.\n" +
+         "Equal to ditchDepth = outer wall rises fully back to road platform.\n" +
+         "Values between give a partially raised outer wall.")]
+    [Range(0f, 10f)]
+    public float ditchOuterWallHeight = 3f;
 
     [Tooltip("Shape of the ditch wall profiles.\n" +
              "0 = straight linear slopes (sharp V or flat trapezoid).\n" +
@@ -367,7 +374,7 @@ public class RoadPathGenerator : ModBehaviour
              "1.0 = fully cuts to the target depth profile.\n" +
              "Lower values produce a shallower impression — good for subtle drainage hints.")]
     [Range(0f, 1f)]
-    public float ditchStrength = 0.75f;
+    public float ditchStrength = 1f;
 
     [Tooltip("Number of Gaussian smoothing passes applied inside the ditch zone after carving.\n" +
              "Smooths the walls and floor without touching terrain outside the zone.\n" +
@@ -383,7 +390,7 @@ public class RoadPathGenerator : ModBehaviour
          "road edge and the ditch inner wall top, eliminating the shelf or\n" +
          "jagged ledge that forms in that gap after flattening.\n" +
          "Only meaningful when both flattenTerrain and generateDitch are active.")]
-    public bool smoothRoadToDitchTransition = false;
+    public bool smoothRoadToDitchTransition = true;
 
     [Tooltip("Blend strength of the road-to-ditch transition.\n" +
              "1.0 = fully overrides whatever flatten left in the transition strip\n" +
@@ -419,7 +426,7 @@ public class RoadPathGenerator : ModBehaviour
              "-1 = strongly biased downward — ditch walls settle into drainage profile.\n" +
              "+1 = biased upward — partially fills the ditch back in.")]
     [Range(-1f, 1f)]
-    public float ditchVerticality = -0.4f;
+    public float ditchVerticality = -0.2f;
 
     [Tooltip("Directional bias for ridge cap smoothing.\n" +
              " 0 = pure average (same as current behaviour).\n" +
@@ -472,7 +479,7 @@ public class RoadPathGenerator : ModBehaviour
              "smoothing covers.  Automatically clamped to stop at the ditch zone\n" +
              "start when a ditch is active, preventing it from undoing the carve.")]
     [Range(0.5f, 50f)]
-    public float shoulderSmoothDistance = 12f;
+    public float shoulderSmoothDistance = 8f;
 
     [Tooltip("Gaussian kernel radius in world units for shoulder smoothing.\n" +
              "Larger radius = broader, softer blending across the shoulder zone.")]
@@ -653,12 +660,12 @@ public class RoadPathGenerator : ModBehaviour
     public List<RoadSegmentStyle> segmentStyles = new List<RoadSegmentStyle>();
 
     // ── Private ───────────────────────────────────────────────
-    private MeshFilter   _meshFilter;
+    private MeshFilter _meshFilter;
     private MeshRenderer _meshRenderer;
     private MeshCollider _meshCollider;
 
     private List<Vector3> _cachedSplinePoints = new List<Vector3>();
-    private int[]         _splineStyleIndices;
+    private int[] _splineStyleIndices;
 
     [SerializeField, HideInInspector] private float[] _savedHeightsFlat;
     [SerializeField, HideInInspector] private int _savedHeightsRes;
@@ -914,6 +921,12 @@ public class RoadPathGenerator : ModBehaviour
             postFlattenH = expandedH;
         }
 
+        // When ditch and shoulder both active, shoulder distance must equal
+        // ditch outer width so white gizmo line aligns with magenta line
+        // and berm starts exactly where the ditch outer toe ends.
+        if (generateDitch && smoothShoulder)
+            shoulderSmoothDistance = ditchOuterWidth;
+        
         // Bake distance field once — all terrain passes share these arrays.
         // Every operation now uses the same consistent per-pixel distance so
         // there are no Voronoi zigzag boundaries between flatten, berm, ditch,
@@ -936,7 +949,7 @@ public class RoadPathGenerator : ModBehaviour
         // of the road corridor before Berm, Ditch, and Shoulder ops run.
         if (flattenBeyondPath && !_skipTerrainShaping)
             FlattenBeyondPathWidth(terrainPts, postFlattenH);
-        
+
         // 3. Berm
         if (generateBerm && !_skipTerrainShaping)
             ApplyBermToTerrain(terrainPts);
@@ -1010,7 +1023,7 @@ public class RoadPathGenerator : ModBehaviour
             Material[] matArray;
             Mesh combined = BuildCombinedMesh(_cachedSplinePoints,
                                               _splineStyleIndices, out matArray);
-            _meshFilter.sharedMesh        = combined;
+            _meshFilter.sharedMesh = combined;
             _meshRenderer.sharedMaterials = matArray;
         }
 
@@ -1037,19 +1050,13 @@ public class RoadPathGenerator : ModBehaviour
             if (_splineStyleIndices != null)
                 foreach (int si in _splineStyleIndices)
                     if (GetSegmentGenerateCollision(si)) { anyCollision = true; break; }
-            else
-                anyCollision = generateCollider;
+                    else
+                        anyCollision = generateCollider;
             _meshCollider.sharedMesh = null;
             if (anyCollision)
                 _meshCollider.sharedMesh = BuildCollisionMesh(_cachedSplinePoints,
                                                               _splineStyleIndices);
         }
-        // 11. Rock scatter — editor only, places prefabs in shoulder
-        // zone as children of a RockScatter container GameObject.
-#if UNITY_EDITOR
-        if (enableRockScatter && !_skipTerrainShaping)
-            ScatterRocks();
-#endif
     }
 
     public void ClearRoad()
@@ -1057,14 +1064,6 @@ public class RoadPathGenerator : ModBehaviour
         if (_meshFilter != null) _meshFilter.sharedMesh = null;
         if (_meshCollider != null) _meshCollider.sharedMesh = null;
 #if UNITY_EDITOR
-        // Destroy rock scatter container and all children
-        Transform existing = transform.Find("RockScatter");
-        if (existing != null)
-            UnityEditor.EditorApplication.delayCall += () =>
-            {
-                if (existing != null)
-                    DestroyImmediate(existing.gameObject);
-            };
         RestoreTerrain();
         _terrainSnapshotTaken = false;
         _savedHeightsFlat = null; _savedHeightsRes   = 0;
@@ -1240,10 +1239,15 @@ public class RoadPathGenerator : ModBehaviour
         // Compute road corridor bounding box with generous padding
         // covering the full berm extent so berm can always read
         // original terrain heights for its outer blend target.
-        float maxFeatureRadius = roadWidth * 0.5f
-            + Mathf.Max(bermSlopeDistance + bermOuterFalloff + 25f,
+        // Multiply by 1.5f instead of adding a flat margin so diagonal
+        // corners of the berm oval are always captured regardless of
+        // how large bermSlopeDistance is. sqrt(2) ~= 1.414 so 1.5
+        // gives a comfortable safety margin beyond the diagonal.
+        float maxFeatureRadius = (roadWidth * 0.5f
+            + Mathf.Max(bermSlopeDistance + bermOuterFalloff,
                         ditchOffset + ditchInnerWidth + ditchBottomWidth
-                        + ditchOuterWidth + shoulderSmoothDistance + 25f);
+                        + ditchOuterWidth + shoulderSmoothDistance))
+            * 1.5f;
 
         float minX = float.MaxValue, maxX = float.MinValue;
         float minZ = float.MaxValue, maxZ = float.MinValue;
@@ -1353,10 +1357,10 @@ public class RoadPathGenerator : ModBehaviour
         int last = cp.Count - 1;
         for (int i = 0; i < last; i++)
         {
-            Vector3 p0 = cp[Mathf.Max(0, i-1)];
+            Vector3 p0 = cp[Mathf.Max(0, i - 1)];
             Vector3 p1 = cp[i];
-            Vector3 p2 = cp[Mathf.Min(cp.Count-1, i+1)];
-            Vector3 p3 = cp[Mathf.Min(cp.Count-1, i+2)];
+            Vector3 p2 = cp[Mathf.Min(cp.Count - 1, i + 1)];
+            Vector3 p3 = cp[Mathf.Min(cp.Count - 1, i + 2)];
             for (int s = 0; s < segmentsPerCurve; s++)
                 result.Add(CatmullRom(p0, p1, p2, p3, s / (float)segmentsPerCurve));
         }
@@ -1389,10 +1393,10 @@ public class RoadPathGenerator : ModBehaviour
         return result;
     }
 
-        static Vector3 CatmullRom(Vector3 p0, Vector3 p1, Vector3 p2, Vector3 p3, float t)
+    static Vector3 CatmullRom(Vector3 p0, Vector3 p1, Vector3 p2, Vector3 p3, float t)
     {
-        float t2 = t*t, t3 = t2*t;
-        return 0.5f * ((2f*p1) + (-p0+p2)*t + (2f*p0-5f*p1+4f*p2-p3)*t2 + (-p0+3f*p1-3f*p2+p3)*t3);
+        float t2 = t * t, t3 = t2 * t;
+        return 0.5f * ((2f * p1) + (-p0 + p2) * t + (2f * p0 - 5f * p1 + 4f * p2 - p3) * t2 + (-p0 + 3f * p1 - 3f * p2 + p3) * t3);
     }
 
     // ─────────────────────────────────────────────────────────
@@ -1403,12 +1407,12 @@ public class RoadPathGenerator : ModBehaviour
     {
         int n = pts.Count;
         List<Vector3> verts = new List<Vector3>();
-        List<Vector2> uvs   = new List<Vector2>();
-        float[] arcLen      = BuildArcLengths(pts);
-        float camberRad     = camberDegrees * Mathf.Deg2Rad;
-        float cU            = Mathf.Sin(camberRad);
+        List<Vector2> uvs = new List<Vector2>();
+        float[] arcLen = BuildArcLengths(pts);
+        float camberRad = camberDegrees * Mathf.Deg2Rad;
+        float cU = Mathf.Sin(camberRad);
 
-        List<Material>  matKeys = new List<Material>();
+        List<Material> matKeys = new List<Material>();
         List<List<int>> matTris = new List<List<int>>();
 
         int[] ringTopBase = new int[n];
@@ -1424,8 +1428,8 @@ public class RoadPathGenerator : ModBehaviour
             Vector3 right = Vector3.Cross(Vector3.up, fwd).normalized;
             float v = arcLen[i] / uvTileLength;
             float cL = cU * (sw * 0.5f), cR = -cL;
-            verts.Add(pts[i] - right*(sw*0.5f) + Vector3.up*cL);
-            verts.Add(pts[i] + right*(sw*0.5f) + Vector3.up*cR);
+            verts.Add(pts[i] - right * (sw * 0.5f) + Vector3.up * cL);
+            verts.Add(pts[i] + right * (sw * 0.5f) + Vector3.up * cR);
             uvs.Add(new Vector2(0f, v)); uvs.Add(new Vector2(1f, v));
         }
 
@@ -1440,35 +1444,35 @@ public class RoadPathGenerator : ModBehaviour
                 Vector3 right = Vector3.Cross(Vector3.up, fwd).normalized;
                 float v = arcLen[i] / uvTileLength;
                 float cL = cU * (sw * 0.5f), cR = -cL;
-                verts.Add(pts[i] - right*(sw*0.5f) + Vector3.up*(cL-roadThickness));
-                verts.Add(pts[i] + right*(sw*0.5f) + Vector3.up*(cR-roadThickness));
+                verts.Add(pts[i] - right * (sw * 0.5f) + Vector3.up * (cL - roadThickness));
+                verts.Add(pts[i] + right * (sw * 0.5f) + Vector3.up * (cR - roadThickness));
                 uvs.Add(new Vector2(0f, v)); uvs.Add(new Vector2(1f, v));
             }
         }
 
-        for (int i = 0; i < n-1; i++)
+        for (int i = 0; i < n - 1; i++)
         {
             int si = styleIndices != null ? styleIndices[i] : 0;
             Material segMat = GetSegmentRoadMaterial(si);
             if (segMat == null) continue;
             List<int> tris = GetOrAddMatTris(matKeys, matTris, segMat);
-            int bl = ringTopBase[i], br = ringTopBase[i]+1;
-            int tl = ringTopBase[i+1], tr = ringTopBase[i+1]+1;
+            int bl = ringTopBase[i], br = ringTopBase[i] + 1;
+            int tl = ringTopBase[i + 1], tr = ringTopBase[i + 1] + 1;
             tris.Add(bl); tris.Add(tl); tris.Add(br);
             tris.Add(br); tris.Add(tl); tris.Add(tr);
-            if (ringBotBase[i] >= 0 && ringBotBase[i+1] >= 0)
+            if (ringBotBase[i] >= 0 && ringBotBase[i + 1] >= 0)
             {
-                int bbl = ringBotBase[i], bbr = ringBotBase[i]+1;
-                int btl = ringBotBase[i+1], btr = ringBotBase[i+1]+1;
+                int bbl = ringBotBase[i], bbr = ringBotBase[i] + 1;
+                int btl = ringBotBase[i + 1], btr = ringBotBase[i + 1] + 1;
                 tris.Add(bbr); tris.Add(btl); tris.Add(bbl);
                 tris.Add(btr); tris.Add(btl); tris.Add(bbr);
             }
         }
 
-        Terrain activeTerr  = Terrain.activeTerrain;
-        float   cLU         = Mathf.Sin(camberDegrees * Mathf.Deg2Rad);
-        int[]   curbRing    = new int[n];
-        bool    anyCurbs    = false;
+        Terrain activeTerr = Terrain.activeTerrain;
+        float cLU = Mathf.Sin(camberDegrees * Mathf.Deg2Rad);
+        int[] curbRing = new int[n];
+        bool anyCurbs = false;
 
         for (int i = 0; i < n; i++)
         {
@@ -1477,42 +1481,42 @@ public class RoadPathGenerator : ModBehaviour
             anyCurbs = true;
             Vector3 fwd = GetForward(pts, i);
             Vector3 right = Vector3.Cross(Vector3.up, fwd).normalized;
-            Vector3 eLi = pts[i] - right*(roadWidth*0.5f);
-            Vector3 eRi = pts[i] + right*(roadWidth*0.5f);
-            Vector3 eLo = eLi - right*curbWidth;
-            Vector3 eRo = eRi + right*curbWidth;
-            float hw2 = roadWidth*0.5f;
-            float yLi = pts[i].y + cLU* hw2;
-            float yRi = pts[i].y + cLU*-hw2;
+            Vector3 eLi = pts[i] - right * (roadWidth * 0.5f);
+            Vector3 eRi = pts[i] + right * (roadWidth * 0.5f);
+            Vector3 eLo = eLi - right * curbWidth;
+            Vector3 eRo = eRi + right * curbWidth;
+            float hw2 = roadWidth * 0.5f;
+            float yLi = pts[i].y + cLU * hw2;
+            float yRi = pts[i].y + cLU * -hw2;
             float yLo = SampleTerrainHeight(eLo, activeTerr);
             float yRo = SampleTerrainHeight(eRo, activeTerr);
             float ctL = yLi + curbHeight, ctR = yRi + curbHeight;
             curbRing[i] = verts.Count;
-            verts.Add(new Vector3(eLi.x, yLi,  eLi.z));
-            verts.Add(new Vector3(eLi.x, ctL,  eLi.z));
-            verts.Add(new Vector3(eLo.x, ctL,  eLo.z));
-            verts.Add(new Vector3(eLo.x, yLo,  eLo.z));
-            verts.Add(new Vector3(eRi.x, yRi,  eRi.z));
-            verts.Add(new Vector3(eRi.x, ctR,  eRi.z));
-            verts.Add(new Vector3(eRo.x, ctR,  eRo.z));
-            verts.Add(new Vector3(eRo.x, yRo,  eRo.z));
+            verts.Add(new Vector3(eLi.x, yLi, eLi.z));
+            verts.Add(new Vector3(eLi.x, ctL, eLi.z));
+            verts.Add(new Vector3(eLo.x, ctL, eLo.z));
+            verts.Add(new Vector3(eLo.x, yLo, eLo.z));
+            verts.Add(new Vector3(eRi.x, yRi, eRi.z));
+            verts.Add(new Vector3(eRi.x, ctR, eRi.z));
+            verts.Add(new Vector3(eRo.x, ctR, eRo.z));
+            verts.Add(new Vector3(eRo.x, yRo, eRo.z));
             uvs.Add(Vector2.zero); uvs.Add(Vector2.up);
-            uvs.Add(Vector2.one);  uvs.Add(Vector2.right);
+            uvs.Add(Vector2.one); uvs.Add(Vector2.right);
             uvs.Add(Vector2.zero); uvs.Add(Vector2.up);
-            uvs.Add(Vector2.one);  uvs.Add(Vector2.right);
+            uvs.Add(Vector2.one); uvs.Add(Vector2.right);
         }
 
         if (anyCurbs)
         {
-            for (int i = 0; i < n-1; i++)
+            for (int i = 0; i < n - 1; i++)
             {
                 int si = styleIndices != null ? styleIndices[i] : 0;
-                if (curbRing[i] < 0 || curbRing[i+1] < 0) continue;
+                if (curbRing[i] < 0 || curbRing[i + 1] < 0) continue;
                 Material cm = GetSegmentCurbMaterial(si);
                 if (cm == null) continue;
                 List<int> ct = GetOrAddMatTris(matKeys, matTris, cm);
-                AddCurbSegment(ct, curbRing[i],   curbRing[i+1],   false);
-                AddCurbSegment(ct, curbRing[i]+4, curbRing[i+1]+4, true);
+                AddCurbSegment(ct, curbRing[i], curbRing[i + 1], false);
+                AddCurbSegment(ct, curbRing[i] + 4, curbRing[i + 1] + 4, true);
             }
         }
 
@@ -1535,28 +1539,28 @@ public class RoadPathGenerator : ModBehaviour
     {
         for (int f = 0; f < 3; f++)
         {
-            int v0=a+f, v1=a+f+1, v2=b+f, v3=b+f+1;
+            int v0 = a + f, v1 = a + f + 1, v2 = b + f, v3 = b + f + 1;
             if (flip) { tris.Add(v0); tris.Add(v2); tris.Add(v1); tris.Add(v1); tris.Add(v2); tris.Add(v3); }
-            else      { tris.Add(v0); tris.Add(v1); tris.Add(v2); tris.Add(v1); tris.Add(v3); tris.Add(v2); }
+            else { tris.Add(v0); tris.Add(v1); tris.Add(v2); tris.Add(v1); tris.Add(v3); tris.Add(v2); }
         }
     }
 
     Mesh BuildCollisionMesh(List<Vector3> pts, int[] styleIndices)
     {
         int n = pts.Count;
-        var verts = new List<Vector3>(n*2);
-        var tris  = new List<int>();
+        var verts = new List<Vector3>(n * 2);
+        var tris = new List<int>();
         for (int i = 0; i < n; i++)
         {
             Vector3 r = Vector3.Cross(Vector3.up, GetForward(pts, i)).normalized;
-            verts.Add(pts[i] - r*(roadWidth*0.5f));
-            verts.Add(pts[i] + r*(roadWidth*0.5f));
+            verts.Add(pts[i] - r * (roadWidth * 0.5f));
+            verts.Add(pts[i] + r * (roadWidth * 0.5f));
         }
-        for (int i = 0; i < n-1; i++)
+        for (int i = 0; i < n - 1; i++)
         {
             int si = (styleIndices != null && i < styleIndices.Length) ? styleIndices[i] : 0;
             if (!GetSegmentGenerateCollision(si)) continue;
-            int bl=i*2, br=i*2+1, tl=(i+1)*2, tr=(i+1)*2+1;
+            int bl = i * 2, br = i * 2 + 1, tl = (i + 1) * 2, tr = (i + 1) * 2 + 1;
             tris.Add(bl); tris.Add(tl); tris.Add(br);
             tris.Add(br); tris.Add(tl); tris.Add(tr);
         }
@@ -1582,7 +1586,7 @@ public class RoadPathGenerator : ModBehaviour
         if (terrain != null)
             return terrain.SampleHeight(worldPos) + terrain.transform.position.y;
         RaycastHit hit;
-        if (Physics.Raycast(new Vector3(worldPos.x, worldPos.y+500f, worldPos.z),
+        if (Physics.Raycast(new Vector3(worldPos.x, worldPos.y + 500f, worldPos.z),
                             Vector3.down, out hit, 1000f)) return hit.point.y;
         return worldPos.y;
     }
@@ -1598,8 +1602,8 @@ public class RoadPathGenerator : ModBehaviour
         if (terrain == null) { Debug.LogWarning("[RoadPathGenerator] FlattenTerrain: no terrain."); return; }
 
         TerrainData td = terrain.terrainData;
-        int   hw          = td.heightmapResolution;
-        float terrainW    = td.size.x, terrainH = td.size.z, terrainMaxY = td.size.y;
+        int hw = td.heightmapResolution;
+        float terrainW = td.size.x, terrainH = td.size.z, terrainMaxY = td.size.y;
         Vector3 terrainPos = terrain.transform.position;
 
         float[] rawH = new float[pts.Count];
@@ -1763,90 +1767,90 @@ public class RoadPathGenerator : ModBehaviour
                     }
                 td.SetHeights(pxMin, pzMin, heights);
         */
-/*  second attempt
-        // When ditch is active the flatten platform extends to the full
-        // ditch outer toe so both sides of the road have an identical flat
-        // base for the ditch profile to work from.  When ditch is inactive
-        // the platform extends only to flattenExtraWidth + flattenFalloff.
-        float ditchOuterToe = generateDitch
-            ? roadWidth * 0.5f + ditchOffset + ditchInnerWidth
-              + ditchBottomWidth + ditchOuterWidth
-            : 0f;
+        /*  second attempt
+                // When ditch is active the flatten platform extends to the full
+                // ditch outer toe so both sides of the road have an identical flat
+                // base for the ditch profile to work from.  When ditch is inactive
+                // the platform extends only to flattenExtraWidth + flattenFalloff.
+                float ditchOuterToe = generateDitch
+                    ? roadWidth * 0.5f + ditchOffset + ditchInnerWidth
+                      + ditchBottomWidth + ditchOuterWidth
+                    : 0f;
 
-        float halfRoad = roadWidth * 0.5f + flattenExtraWidth;
-        float totalHalf = generateDitch
-            ? ditchOuterToe
-            : halfRoad + flattenFalloff;
+                float halfRoad = roadWidth * 0.5f + flattenExtraWidth;
+                float totalHalf = generateDitch
+                    ? ditchOuterToe
+                    : halfRoad + flattenFalloff;
 
-        // Raise the platform by ditchDepth when ditch is active so the
-        // profile always has room to descend even on flat zero terrain.
-        // On elevated terrain this raise is imperceptible.
-        float platformRaise = (generateDitch && !_skipTerrainShaping)
-            ? ditchDepth : 0f;
+                // Raise the platform by ditchDepth when ditch is active so the
+                // profile always has room to descend even on flat zero terrain.
+                // On elevated terrain this raise is imperceptible.
+                float platformRaise = (generateDitch && !_skipTerrainShaping)
+                    ? ditchDepth : 0f;
 
-        float cSlope = Mathf.Sin(camberDegrees * Mathf.Deg2Rad);
+                float cSlope = Mathf.Sin(camberDegrees * Mathf.Deg2Rad);
 
-        float minX = float.MaxValue, maxX = float.MinValue, minZ = float.MaxValue, maxZ = float.MinValue;
-        foreach (Vector3 p in pts)
-        {
-            if (p.x - totalHalf < minX) minX = p.x - totalHalf; if (p.x + totalHalf > maxX) maxX = p.x + totalHalf;
-            if (p.z - totalHalf < minZ) minZ = p.z - totalHalf; if (p.z + totalHalf > maxZ) maxZ = p.z + totalHalf;
-        }
-        int pxMin = Mathf.Clamp(Mathf.FloorToInt(((minX - terrainPos.x) / terrainW) * (hw - 1)), 0, hw - 1);
-        int pxMax = Mathf.Clamp(Mathf.CeilToInt(((maxX - terrainPos.x) / terrainW) * (hw - 1)), 0, hw - 1);
-        int pzMin = Mathf.Clamp(Mathf.FloorToInt(((minZ - terrainPos.z) / terrainH) * (hw - 1)), 0, hw - 1);
-        int pzMax = Mathf.Clamp(Mathf.CeilToInt(((maxZ - terrainPos.z) / terrainH) * (hw - 1)), 0, hw - 1);
-        int subW = pxMax - pxMin + 1, subH = pzMax - pzMin + 1;
-        float[,] heights = td.GetHeights(pxMin, pzMin, subW, subH);
-
-        for (int lz = 0; lz < subH; lz++)
-            for (int lx = 0; lx < subW; lx++)
-            {
-                float wx = terrainPos.x + ((pxMin + lx) / (float)(hw - 1)) * terrainW;
-                float wz = terrainPos.z + ((pzMin + lz) / (float)(hw - 1)) * terrainH;
-                float interpH, sc;
-                float cd = ClosestPointOnSplineXZ(wx, wz, pts, smoothH, out interpH, out sc);
-                if (cd > totalHalf) continue;
-
-                // Zone 1 — flat road surface at centreline height.
-                // Platform raised by ditchDepth when ditch active so the
-                // ditch profile always has room to descend.
-                if (cd <= halfRoad)
+                float minX = float.MaxValue, maxX = float.MinValue, minZ = float.MaxValue, maxZ = float.MinValue;
+                foreach (Vector3 p in pts)
                 {
-                    float target = interpH + platformRaise;
-                    heights[lz, lx] = Mathf.Clamp01(
-                        (target - terrainPos.y) / terrainMaxY);
-                    continue;
+                    if (p.x - totalHalf < minX) minX = p.x - totalHalf; if (p.x + totalHalf > maxX) maxX = p.x + totalHalf;
+                    if (p.z - totalHalf < minZ) minZ = p.z - totalHalf; if (p.z + totalHalf > maxZ) maxZ = p.z + totalHalf;
                 }
+                int pxMin = Mathf.Clamp(Mathf.FloorToInt(((minX - terrainPos.x) / terrainW) * (hw - 1)), 0, hw - 1);
+                int pxMax = Mathf.Clamp(Mathf.CeilToInt(((maxX - terrainPos.x) / terrainW) * (hw - 1)), 0, hw - 1);
+                int pzMin = Mathf.Clamp(Mathf.FloorToInt(((minZ - terrainPos.z) / terrainH) * (hw - 1)), 0, hw - 1);
+                int pzMax = Mathf.Clamp(Mathf.CeilToInt(((maxZ - terrainPos.z) / terrainH) * (hw - 1)), 0, hw - 1);
+                int subW = pxMax - pxMin + 1, subH = pzMax - pzMin + 1;
+                float[,] heights = td.GetHeights(pxMin, pzMin, subW, subH);
 
-                // Zone 2 — extended flat platform to ditch outer toe.
-                // No falloff, no blend — hard flat at road height + raise
-                // so ditch profile has an identical base on both sides.
-                if (generateDitch && cd <= ditchOuterToe)
-                {
-                    float target = interpH + platformRaise;
-                    heights[lz, lx] = Mathf.Clamp01(
-                        (target - terrainPos.y) / terrainMaxY);
-                    continue;
-                }
+                for (int lz = 0; lz < subH; lz++)
+                    for (int lx = 0; lx < subW; lx++)
+                    {
+                        float wx = terrainPos.x + ((pxMin + lx) / (float)(hw - 1)) * terrainW;
+                        float wz = terrainPos.z + ((pzMin + lz) / (float)(hw - 1)) * terrainH;
+                        float interpH, sc;
+                        float cd = ClosestPointOnSplineXZ(wx, wz, pts, smoothH, out interpH, out sc);
+                        if (cd > totalHalf) continue;
 
-                // Zone 3 — shoulder falloff when ditch is not active.
-                // Cosine ease from road edge back toward natural terrain.
-                if (!generateDitch && flattenFalloff > 0.001f)
-                {
-                    float t = (cd - halfRoad) / flattenFalloff;
-                    float blend = Mathf.Pow(
-                        Mathf.Cos(Mathf.Clamp01(t) * Mathf.PI * 0.5f), 2f);
-                    float target = interpH + platformRaise;
-                    heights[lz, lx] = Mathf.Lerp(heights[lz, lx],
-                        Mathf.Clamp01((target - terrainPos.y) / terrainMaxY),
-                        Mathf.Clamp01(blend));
-                }
-            }
-        td.SetHeights(pxMin, pzMin, heights);
-*/
+                        // Zone 1 — flat road surface at centreline height.
+                        // Platform raised by ditchDepth when ditch active so the
+                        // ditch profile always has room to descend.
+                        if (cd <= halfRoad)
+                        {
+                            float target = interpH + platformRaise;
+                            heights[lz, lx] = Mathf.Clamp01(
+                                (target - terrainPos.y) / terrainMaxY);
+                            continue;
+                        }
 
-        for (int i = 0; i < pts.Count; i++) { Vector3 p=pts[i]; p.y=smoothH[i]; pts[i]=p; }
+                        // Zone 2 — extended flat platform to ditch outer toe.
+                        // No falloff, no blend — hard flat at road height + raise
+                        // so ditch profile has an identical base on both sides.
+                        if (generateDitch && cd <= ditchOuterToe)
+                        {
+                            float target = interpH + platformRaise;
+                            heights[lz, lx] = Mathf.Clamp01(
+                                (target - terrainPos.y) / terrainMaxY);
+                            continue;
+                        }
+
+                        // Zone 3 — shoulder falloff when ditch is not active.
+                        // Cosine ease from road edge back toward natural terrain.
+                        if (!generateDitch && flattenFalloff > 0.001f)
+                        {
+                            float t = (cd - halfRoad) / flattenFalloff;
+                            float blend = Mathf.Pow(
+                                Mathf.Cos(Mathf.Clamp01(t) * Mathf.PI * 0.5f), 2f);
+                            float target = interpH + platformRaise;
+                            heights[lz, lx] = Mathf.Lerp(heights[lz, lx],
+                                Mathf.Clamp01((target - terrainPos.y) / terrainMaxY),
+                                Mathf.Clamp01(blend));
+                        }
+                    }
+                td.SetHeights(pxMin, pzMin, heights);
+        */
+
+        for (int i = 0; i < pts.Count; i++) { Vector3 p = pts[i]; p.y = smoothH[i]; pts[i] = p; }
         postFlattenH = smoothH;
     }
 
@@ -1982,32 +1986,29 @@ public class RoadPathGenerator : ModBehaviour
         TerrainData td = terrain.terrainData;
         float terrainMaxY = td.size.y;
         Vector3 terrainPos = terrain.transform.position;
+        float tW = td.size.x, tH = td.size.z;
+        int hw = td.heightmapResolution;
 
         float halfRoad = roadWidth * 0.5f + flattenExtraWidth;
-
-        // Full flat platform extends to ditch outer toe when ditch active
-        /*    float ditchOuterToe = generateDitch
-                ? roadWidth * 0.5f + ditchOffset + ditchInnerWidth
-                  + ditchBottomWidth + ditchOuterWidth
-                : 0f;
-
-            float totalHalf = generateDitch
-                ? ditchOuterToe
-                : halfRoad + flattenFalloff;
-        */
         float totalHalf = generateDitch
             ? roadWidth * 0.5f + ditchOffset + ditchInnerWidth
               + ditchBottomWidth + ditchOuterWidth
             : halfRoad + flattenFalloff;
-
-        // Raise platform by ditchDepth when ditch active so the profile
-        // always has room to descend even on flat zero terrain.
         float platformRaise = generateDitch ? ditchDepth : 0f;
+        float bermToeLocal = bermSlopeDistance + bermOuterFalloff;
+        float endFadeLength = Mathf.Max(20f, ditchOuterWidth);
 
-        // Endpoint tangents for end-cap rejection
-        // (reuse cached spline points — terrainPts not available here
-        //  but the distance field already covers the correct region)
-        Terrain at = Terrain.activeTerrain;
+        // Endpoint tangents for longitudinal fade
+        List<Vector3> pts = _cachedSplinePoints;
+        if (pts == null || pts.Count < 2) return;
+        Vector2 startTangent = new Vector2(
+            pts[1].x - pts[0].x, pts[1].z - pts[0].z).normalized;
+        Vector2 startOrigin = new Vector2(pts[0].x, pts[0].z);
+        int lastIdx = pts.Count - 1;
+        Vector2 endTangent = new Vector2(
+            pts[lastIdx].x - pts[lastIdx - 1].x,
+            pts[lastIdx].z - pts[lastIdx - 1].z).normalized;
+        Vector2 endOrigin = new Vector2(pts[lastIdx].x, pts[lastIdx].z);
 
         float[,] heights = td.GetHeights(_distField.pxMin, _distField.pzMin,
                                          _distField.subW, _distField.subH);
@@ -2019,22 +2020,47 @@ public class RoadPathGenerator : ModBehaviour
                 float cd = _distField.crossDist[idx];
                 if (cd > totalHalf + 0.5f) continue;
 
+                float wx = terrainPos.x + ((_distField.pxMin + lx) / (float)(hw - 1)) * tW;
+                float wz = terrainPos.z + ((_distField.pzMin + lz) / (float)(hw - 1)) * tH;
+                Vector2 pq = new Vector2(wx, wz);
+
+                // ── Longitudinal endpoint fade ────────────────────
+                float distStart = Vector2.Dot(pq - startOrigin, startTangent);
+                float distEnd = Vector2.Dot(endOrigin - pq, endTangent);
+
+                if (distStart < -bermToeLocal) continue;
+                if (distEnd < -bermToeLocal) continue;
+
+                float fadeStartN = Mathf.Clamp01(distStart /
+                                   Mathf.Max(0.001f, endFadeLength));
+                float fadeEndN = Mathf.Clamp01(distEnd /
+                                   Mathf.Max(0.001f, endFadeLength));
+                float endFade = Mathf.Min(
+                    (1f - Mathf.Cos(fadeStartN * Mathf.PI)) * 0.5f,
+                    (1f - Mathf.Cos(fadeEndN * Mathf.PI)) * 0.5f);
+
+                if (endFade < 0.001f) continue;
+
                 float centreH = _distField.centreH[idx];
-                float target = centreH + platformRaise;
+                float target = centreH + platformRaise * endFade;
 
                 // Zone 1 — flat road corridor
                 if (cd <= halfRoad)
                 {
-                    heights[lz, lx] = Mathf.Clamp01(
+                    float written = Mathf.Clamp01(
                         (target - terrainPos.y) / terrainMaxY);
+                    heights[lz, lx] = Mathf.Lerp(
+                        heights[lz, lx], written, endFade);
                     continue;
                 }
 
                 // Zone 2 — extended flat platform when ditch active
                 if (generateDitch && cd <= totalHalf)
                 {
-                    heights[lz, lx] = Mathf.Clamp01(
+                    float written = Mathf.Clamp01(
                         (target - terrainPos.y) / terrainMaxY);
+                    heights[lz, lx] = Mathf.Lerp(
+                        heights[lz, lx], written, endFade);
                     continue;
                 }
 
@@ -2043,7 +2069,8 @@ public class RoadPathGenerator : ModBehaviour
                 {
                     float t = (cd - halfRoad) / flattenFalloff;
                     float blend = Mathf.Pow(
-                        Mathf.Cos(Mathf.Clamp01(t) * Mathf.PI * 0.5f), 2f);
+                        Mathf.Cos(Mathf.Clamp01(t) * Mathf.PI * 0.5f), 2f)
+                        * endFade;
                     if (blend < 0.001f) continue;
                     heights[lz, lx] = Mathf.Lerp(heights[lz, lx],
                         Mathf.Clamp01((target - terrainPos.y) / terrainMaxY),
@@ -2171,21 +2198,33 @@ public class RoadPathGenerator : ModBehaviour
                 }
                 else if (cd <= zOuterEnd)
                 {
-                    // Outer wall — S-curve rise from floorH back to
-                    // existing terrain (lerp toward current height)
+                    // Outer wall — S-curve rise from floorH up to
+                    // ditchOuterWallHeight above centreline.
+                    // 0 = stays at floor, ditchDepth = full platform height.
                     float t = Mathf.Clamp01((cd - zFloorEnd) /
                                Mathf.Max(0.001f, ditchOuterWidth));
                     float tS = t * t * (3f - 2f * t);
                     float tF = Mathf.Lerp(t, tS, ditchCurvature);
-                    // Blend from floor height back to whatever terrain is
-                    targetH = Mathf.Lerp(floorH,
-                               currentH * terrainMaxY + terrainPos.y, tF);
+                    float outerTopH = centreH + ditchOuterWallHeight;
+                    targetH = Mathf.Lerp(floorH, outerTopH, tF);
                 }
                 else continue;
 
+                // ── Longitudinal endpoint fade ────────────────────
+                float ditchFadeLen = Mathf.Max(20f, ditchOuterWidth);
+                float ditchDistStart = Vector2.Dot(pq - startOrigin, startTangent);
+                float ditchDistEnd = Vector2.Dot(endOrigin - pq, endTangent);
+                float ditchFadeStartN = Mathf.Clamp01(ditchDistStart /
+                                        Mathf.Max(0.001f, ditchFadeLen));
+                float ditchFadeEndN = Mathf.Clamp01(ditchDistEnd /
+                                        Mathf.Max(0.001f, ditchFadeLen));
+                float ditchEndFade = Mathf.Min(
+                    (1f - Mathf.Cos(ditchFadeStartN * Mathf.PI)) * 0.5f,
+                    (1f - Mathf.Cos(ditchFadeEndN * Mathf.PI)) * 0.5f);
+
                 heights[lz, lx] = Mathf.Lerp(currentH,
                     Mathf.Clamp01((targetH - terrainPos.y) / terrainMaxY),
-                    ditchStrength);
+                    ditchStrength * ditchEndFade);
             }
 
         td.SetHeights(_distField.pxMin, _distField.pzMin, heights);
@@ -2352,14 +2391,25 @@ public class RoadPathGenerator : ModBehaviour
                 float wx = terrainPos.x + ((_distField.pxMin + lx) / (float)(hw - 1)) * tW;
                 float wz = terrainPos.z + ((_distField.pzMin + lz) / (float)(hw - 1)) * tH;
 
-                // ── End-cap rejection ─────────────────────────────
+                // ── End-cap rejection with longitudinal fade ──────
                 Vector2 pq = new Vector2(wx, wz);
-                if (Vector2.Dot(pq - startOrigin, startTangent) < 0f) continue;
-                if (Vector2.Dot(pq - endOrigin, endTangent) > 0f) continue;
+                float sFadeLen = Mathf.Max(20f, ditchOuterWidth);
+                float sDistStart = Vector2.Dot(pq - startOrigin, startTangent);
+                float sDistEnd = Vector2.Dot(endOrigin - pq, endTangent);
+                if (sDistStart < -profileEnd) continue;
+                if (sDistEnd < -profileEnd) continue;
+                float sFadeStartN = Mathf.Clamp01(sDistStart /
+                                       Mathf.Max(0.001f, sFadeLen));
+                float sFadeEndN = Mathf.Clamp01(sDistEnd /
+                                       Mathf.Max(0.001f, sFadeLen));
+                float shoulderEndFade = Mathf.Min(
+                    (1f - Mathf.Cos(sFadeStartN * Mathf.PI)) * 0.5f,
+                    (1f - Mathf.Cos(sFadeEndN * Mathf.PI)) * 0.5f);
+                if (shoulderEndFade < 0.001f) continue;
 
                 // ── Inner edge height ─────────────────────────────
                 float centreH = _distField.centreH[idx];
-                float platformRaise = generateDitch ? ditchDepth : 0f;
+                float platformRaise = generateDitch ? ditchOuterWallHeight : 0f;
                 float roadEdgeH = centreH + platformRaise;
 
                 // ── Cosine rise from ditch outer wall top back up
@@ -2376,8 +2426,10 @@ public class RoadPathGenerator : ModBehaviour
                 float innerH = centreH;
                 float targetH = Mathf.Lerp(innerH, roadEdgeH, cosT);
 
-                heights[lz, lx] = Mathf.Clamp01(
-                    (targetH - terrainPos.y) / terrainMaxY);
+                heights[lz, lx] = Mathf.Lerp(
+                    heights[lz, lx],
+                    Mathf.Clamp01((targetH - terrainPos.y) / terrainMaxY),
+                    shoulderEndFade);
             }
 
         td.SetHeights(_distField.pxMin, _distField.pzMin, heights);
@@ -2394,65 +2446,65 @@ public class RoadPathGenerator : ModBehaviour
     //  rounded shoulder seen in the reference screenshots rather
     //  than a hard shelf at the road edge.
 
-/*    void ApplyFlattenProfile(List<Vector3> pts, float[] smoothH)
-    {
-        if (_distField == null) return;
-        Terrain terrain = Terrain.activeTerrain;
-        if (terrain == null) return;
+    /*    void ApplyFlattenProfile(List<Vector3> pts, float[] smoothH)
+        {
+            if (_distField == null) return;
+            Terrain terrain = Terrain.activeTerrain;
+            if (terrain == null) return;
 
-        TerrainData td = terrain.terrainData;
-        float terrainMaxY = td.size.y;
-        Vector3 terrainPos = terrain.transform.position;
+            TerrainData td = terrain.terrainData;
+            float terrainMaxY = td.size.y;
+            Vector3 terrainPos = terrain.transform.position;
 
-        float flatZone = roadWidth * 0.5f + flattenExtraWidth;
-        float totalZone = flatZone + flattenFalloff;
-        float cSlope = Mathf.Sin(camberDegrees * Mathf.Deg2Rad);
+            float flatZone = roadWidth * 0.5f + flattenExtraWidth;
+            float totalZone = flatZone + flattenFalloff;
+            float cSlope = Mathf.Sin(camberDegrees * Mathf.Deg2Rad);
 
-        float[,] heights = td.GetHeights(_distField.pxMin, _distField.pzMin,
-                                         _distField.subW, _distField.subH);
+            float[,] heights = td.GetHeights(_distField.pxMin, _distField.pzMin,
+                                             _distField.subW, _distField.subH);
 
-        for (int lz = 0; lz < _distField.subH; lz++)
-            for (int lx = 0; lx < _distField.subW; lx++)
-            {
-                int idx = _distField.Idx(lz, lx);
-                float cd = _distField.crossDist[idx];
-                if (cd > totalZone) continue;
-
-                float interpH = _distField.centreH[idx];
-                float sc = _distField.signedCross[idx];
-                float target = interpH - cSlope * sc;
-
-                float blend;
-                if (cd <= flatZone)
+            for (int lz = 0; lz < _distField.subH; lz++)
+                for (int lx = 0; lx < _distField.subW; lx++)
                 {
-                    blend = 1f;
-                }
-                else if (flattenFalloff > 0.001f)
-                {
-                    // Cosine ease — zero gradient at both ends so the
-                    // shoulder curves smoothly from the flat road surface
-                    // back to natural terrain with no visible kink.
-                    float t = (cd - flatZone) / flattenFalloff;
-                    blend = Mathf.Pow(Mathf.Cos(Mathf.Clamp01(t) * Mathf.PI * 0.5f), 2f);
-                }
-                else
-                {
-                    // Zero falloff — apply a sub-pixel soft blend at the
-                    // boundary using the blurred distance field so the edge
-                    // is always smooth rather than a hard Voronoi step.
-                    float pixelWorld = Mathf.Max(_distField.wpx, _distField.wpz);
-                    float t = (cd - flatZone) / (pixelWorld * 2f);
-                    blend = t < 1f ? Mathf.Pow(Mathf.Cos(Mathf.Clamp01(t) * Mathf.PI * 0.5f), 2f) : 0f;
+                    int idx = _distField.Idx(lz, lx);
+                    float cd = _distField.crossDist[idx];
+                    if (cd > totalZone) continue;
+
+                    float interpH = _distField.centreH[idx];
+                    float sc = _distField.signedCross[idx];
+                    float target = interpH - cSlope * sc;
+
+                    float blend;
+                    if (cd <= flatZone)
+                    {
+                        blend = 1f;
+                    }
+                    else if (flattenFalloff > 0.001f)
+                    {
+                        // Cosine ease — zero gradient at both ends so the
+                        // shoulder curves smoothly from the flat road surface
+                        // back to natural terrain with no visible kink.
+                        float t = (cd - flatZone) / flattenFalloff;
+                        blend = Mathf.Pow(Mathf.Cos(Mathf.Clamp01(t) * Mathf.PI * 0.5f), 2f);
+                    }
+                    else
+                    {
+                        // Zero falloff — apply a sub-pixel soft blend at the
+                        // boundary using the blurred distance field so the edge
+                        // is always smooth rather than a hard Voronoi step.
+                        float pixelWorld = Mathf.Max(_distField.wpx, _distField.wpz);
+                        float t = (cd - flatZone) / (pixelWorld * 2f);
+                        blend = t < 1f ? Mathf.Pow(Mathf.Cos(Mathf.Clamp01(t) * Mathf.PI * 0.5f), 2f) : 0f;
+                    }
+
+                    if (blend < 0.001f) continue;
+                    heights[lz, lx] = Mathf.Lerp(heights[lz, lx],
+                        Mathf.Clamp01((target - terrainPos.y) / terrainMaxY), blend);
                 }
 
-                if (blend < 0.001f) continue;
-                heights[lz, lx] = Mathf.Lerp(heights[lz, lx],
-                    Mathf.Clamp01((target - terrainPos.y) / terrainMaxY), blend);
-            }
-
-        td.SetHeights(_distField.pxMin, _distField.pzMin, heights);
-    }
-*/
+            td.SetHeights(_distField.pxMin, _distField.pzMin, heights);
+        }
+    */
 
     // ─────────────────────────────────────────────────────────
     //  Terrain – Narrow Road Surface Re-flatten
@@ -2677,18 +2729,37 @@ public class RoadPathGenerator : ModBehaviour
 
                 if (cd < bermStart || cd > bermToe) continue;
 
-                // ── End-cap rejection ─────────────────────────────
+                // ── End-cap rejection with longitudinal fade ──────
                 Vector2 pq = new Vector2(wx, wz);
-                if (Vector2.Dot(pq - startOrigin, startTangent) < 0f) continue;
-                if (Vector2.Dot(pq - endOrigin, endTangent) > 0f) continue;
+                float bermFadeLen = Mathf.Max(20f, ditchOuterWidth);
+                float bDistStart = Vector2.Dot(pq - startOrigin, startTangent);
+                float bDistEnd = Vector2.Dot(endOrigin - pq, endTangent);
+                if (bDistStart < -bermToe) continue;
+                if (bDistEnd < -bermToe) continue;
+                float bFadeStartN = Mathf.Clamp01(bDistStart /
+                                    Mathf.Max(0.001f, bermFadeLen));
+                float bFadeEndN = Mathf.Clamp01(bDistEnd /
+                                    Mathf.Max(0.001f, bermFadeLen));
+                float bermEndFade = Mathf.Min(
+                    (1f - Mathf.Cos(bFadeStartN * Mathf.PI)) * 0.5f,
+                    (1f - Mathf.Cos(bFadeEndN * Mathf.PI)) * 0.5f);
+                if (bermEndFade < 0.001f) continue;
 
-                // ── Height references from distance field ─────────
+                // ── Height references ─────────────────────────────
                 float centreH = _distField.SampleCentreH(wx, wz);
-                float edgeH = centreH + (generateDitch ? ditchDepth : 0f);
+                // edgeH fades from origH at endpoints toward the raised
+                // platform height along the path so berm matches what
+                // flatten actually wrote — eliminates the asymmetric mound.
+                float baseEdgeH = centreH +
+                    (generateDitch ? ditchOuterWallHeight : 0f);
 
-                // Outer target — original terrain or current heightmap
+                // Outer target — always use snapshot if available so berm
+                // blends toward true pre-generation terrain height regardless
+                // of bermUseOriginalTerrain setting. This prevents the hard
+                // wall that appears when origH is read from the already-modified
+                // heightmap which may still be at the raised platform height.
                 float origH;
-                if (bermUseOriginalTerrain && savedH != null)
+                if (savedH != null)
                 {
                     int absPx = Mathf.Clamp(pxMin + lx, 0, hw - 1);
                     int absPz = Mathf.Clamp(pzMin + lz, 0, hw - 1);
@@ -2702,6 +2773,8 @@ public class RoadPathGenerator : ModBehaviour
                 {
                     origH = heights[lz, lx] * tMaxY + tPos.y;
                 }
+
+                float edgeH = Mathf.Lerp(origH, baseEdgeH, bermEndFade);
 
                 // ── Berm profile — cosine ease ────────────────────
                 // Pure cosine gives zero gradient at both the inner
@@ -2785,90 +2858,90 @@ public class RoadPathGenerator : ModBehaviour
         if (terrain == null) return;
 
         TerrainData td = terrain.terrainData;
-        int   hw       = td.heightmapResolution;
-        float tW       = td.size.x, tH = td.size.z, tMaxY = td.size.y;
-        Vector3 tPos   = terrain.transform.position;
+        int hw = td.heightmapResolution;
+        float tW = td.size.x, tH = td.size.z, tMaxY = td.size.y;
+        Vector3 tPos = terrain.transform.position;
 
-        float halfRoad   = roadWidth * 0.5f;
-        float capW       = ridgeCapWidth;
+        float halfRoad = roadWidth * 0.5f;
+        float capW = ridgeCapWidth;
         // Zone: from (halfRoad - capW) to (halfRoad + capW)
         // Clamped so we never go negative (inner boundary always >= 0)
-        float zoneInner  = Mathf.Max(0f, halfRoad - capW);
-        float zoneOuter  = halfRoad + capW;
-        float padded     = zoneOuter + 2f;
-        float cSlope     = Mathf.Sin(camberDegrees * Mathf.Deg2Rad);
+        float zoneInner = Mathf.Max(0f, halfRoad - capW);
+        float zoneOuter = halfRoad + capW;
+        float padded = zoneOuter + 2f;
+        float cSlope = Mathf.Sin(camberDegrees * Mathf.Deg2Rad);
 
         // ── Bounding box ──────────────────────────────────────
-        float minX=float.MaxValue,maxX=float.MinValue,minZ=float.MaxValue,maxZ=float.MinValue;
+        float minX = float.MaxValue, maxX = float.MinValue, minZ = float.MaxValue, maxZ = float.MinValue;
         foreach (Vector3 p in pts)
         {
-            if(p.x-padded<minX)minX=p.x-padded; if(p.x+padded>maxX)maxX=p.x+padded;
-            if(p.z-padded<minZ)minZ=p.z-padded; if(p.z+padded>maxZ)maxZ=p.z+padded;
+            if (p.x - padded < minX) minX = p.x - padded; if (p.x + padded > maxX) maxX = p.x + padded;
+            if (p.z - padded < minZ) minZ = p.z - padded; if (p.z + padded > maxZ) maxZ = p.z + padded;
         }
-        int pxMin=Mathf.Clamp(Mathf.FloorToInt(((minX-tPos.x)/tW)*(hw-1)),0,hw-1);
-        int pxMax=Mathf.Clamp(Mathf.CeilToInt( ((maxX-tPos.x)/tW)*(hw-1)),0,hw-1);
-        int pzMin=Mathf.Clamp(Mathf.FloorToInt(((minZ-tPos.z)/tH)*(hw-1)),0,hw-1);
-        int pzMax=Mathf.Clamp(Mathf.CeilToInt( ((maxZ-tPos.z)/tH)*(hw-1)),0,hw-1);
-        int subW=pxMax-pxMin+1, subH=pzMax-pzMin+1;
+        int pxMin = Mathf.Clamp(Mathf.FloorToInt(((minX - tPos.x) / tW) * (hw - 1)), 0, hw - 1);
+        int pxMax = Mathf.Clamp(Mathf.CeilToInt(((maxX - tPos.x) / tW) * (hw - 1)), 0, hw - 1);
+        int pzMin = Mathf.Clamp(Mathf.FloorToInt(((minZ - tPos.z) / tH) * (hw - 1)), 0, hw - 1);
+        int pzMax = Mathf.Clamp(Mathf.CeilToInt(((maxZ - tPos.z) / tH) * (hw - 1)), 0, hw - 1);
+        int subW = pxMax - pxMin + 1, subH = pzMax - pzMin + 1;
 
-        float wpx = tW / (hw-1), wpz = tH / (hw-1);
+        float wpx = tW / (hw - 1), wpz = tH / (hw - 1);
 
         // ── Cache spline query per pixel ─────────────────────
-        float[] cCross   = new float[subW*subH];
-        float[] cSigned  = new float[subW*subH];
-        float[] cInterpH = new float[subW*subH];
+        float[] cCross = new float[subW * subH];
+        float[] cSigned = new float[subW * subH];
+        float[] cInterpH = new float[subW * subH];
 
         for (int lz = 0; lz < subH; lz++)
-        for (int lx = 0; lx < subW; lx++)
-        {
-            float wx=tPos.x+((pxMin+lx)/(float)(hw-1))*tW;
-            float wz=tPos.z+((pzMin+lz)/(float)(hw-1))*tH;
-            float iH, sc;
-            float cd = ClosestPointOnSplineXZ(wx, wz, pts, splineH, out iH, out sc);
-            int idx = lz*subW+lx;
-            cCross[idx]=cd; cSigned[idx]=sc; cInterpH[idx]=iH;
-        }
+            for (int lx = 0; lx < subW; lx++)
+            {
+                float wx = tPos.x + ((pxMin + lx) / (float)(hw - 1)) * tW;
+                float wz = tPos.z + ((pzMin + lz) / (float)(hw - 1)) * tH;
+                float iH, sc;
+                float cd = ClosestPointOnSplineXZ(wx, wz, pts, splineH, out iH, out sc);
+                int idx = lz * subW + lx;
+                cCross[idx] = cd; cSigned[idx] = sc; cInterpH[idx] = iH;
+            }
 
         float[,] heights = td.GetHeights(pxMin, pzMin, subW, subH);
 
         // ── Bell stamp ───────────────────────────────────────
         for (int lz = 0; lz < subH; lz++)
-        for (int lx = 0; lx < subW; lx++)
-        {
-            int   idx = lz*subW+lx;
-            float cd  = cCross[idx];
-            if (cd < zoneInner || cd > zoneOuter) continue;
+            for (int lx = 0; lx < subW; lx++)
+            {
+                int idx = lz * subW + lx;
+                float cd = cCross[idx];
+                if (cd < zoneInner || cd > zoneOuter) continue;
 
-            float signed  = cSigned[idx];
-            float interpH = cInterpH[idx];
+                float signed = cSigned[idx];
+                float interpH = cInterpH[idx];
 
-            // Smooth crest height at the road edge nearest to this pixel.
-            // signed < 0 → left side (high when camber > 0)
-            // signed > 0 → right side
-            // Formula: targetH = interpH - cSlope * signedCross
-            // At left edge (signed = -halfRoad): targetH = interpH + cSlope*halfRoad
-            // At right edge (signed = +halfRoad): targetH = interpH - cSlope*halfRoad
-            float crestH = (signed <= 0f)
-                ? interpH + cSlope * halfRoad
-                : interpH - cSlope * halfRoad;
+                // Smooth crest height at the road edge nearest to this pixel.
+                // signed < 0 → left side (high when camber > 0)
+                // signed > 0 → right side
+                // Formula: targetH = interpH - cSlope * signedCross
+                // At left edge (signed = -halfRoad): targetH = interpH + cSlope*halfRoad
+                // At right edge (signed = +halfRoad): targetH = interpH - cSlope*halfRoad
+                float crestH = (signed <= 0f)
+                    ? interpH + cSlope * halfRoad
+                    : interpH - cSlope * halfRoad;
 
-            // Normalised distance from road edge [0=edge, 1=boundary]
-            float dFromEdge = Mathf.Abs(cd - halfRoad);
-            float tN        = Mathf.Clamp01(dFromEdge / capW);
+                // Normalised distance from road edge [0=edge, 1=boundary]
+                float dFromEdge = Mathf.Abs(cd - halfRoad);
+                float tN = Mathf.Clamp01(dFromEdge / capW);
 
-            // Bell: blend cosine and Gaussian by ridgeCapSharpness
-            float cosBell  = Mathf.Pow(Mathf.Cos(tN * Mathf.PI * 0.5f), 2f);
-            float gSigma   = 0.4f;
-            float gaussB   = Mathf.Exp(-(tN*tN)/(2f*gSigma*gSigma));
-            float bell     = Mathf.Lerp(cosBell, gaussB, ridgeCapSharpness);
-            float blendW   = bell * ridgeCapStrength;
-            if (blendW < 0.001f) continue;
+                // Bell: blend cosine and Gaussian by ridgeCapSharpness
+                float cosBell = Mathf.Pow(Mathf.Cos(tN * Mathf.PI * 0.5f), 2f);
+                float gSigma = 0.4f;
+                float gaussB = Mathf.Exp(-(tN * tN) / (2f * gSigma * gSigma));
+                float bell = Mathf.Lerp(cosBell, gaussB, ridgeCapSharpness);
+                float blendW = bell * ridgeCapStrength;
+                if (blendW < 0.001f) continue;
 
-            // ridgeCapHeight lifts/lowers the crest, scaled by bell so the rounded
-            // profile is preserved — full offset at road edge, zero at cap boundary.
-            float crestNorm  = (crestH + ridgeCapHeight * bell - tPos.y) / tMaxY;
-            heights[lz, lx] = Mathf.Lerp(heights[lz, lx], crestNorm, blendW);
-        }
+                // ridgeCapHeight lifts/lowers the crest, scaled by bell so the rounded
+                // profile is preserved — full offset at road edge, zero at cap boundary.
+                float crestNorm = (crestH + ridgeCapHeight * bell - tPos.y) / tMaxY;
+                heights[lz, lx] = Mathf.Lerp(heights[lz, lx], crestNorm, blendW);
+            }
 
         td.SetHeights(pxMin, pzMin, heights);
 
@@ -2889,32 +2962,32 @@ public class RoadPathGenerator : ModBehaviour
                 float[,] dst = (float[,])src.Clone();
 
                 for (int lz = 0; lz < subH; lz++)
-                for (int lx = 0; lx < subW; lx++)
-                {
-                    int   idx = lz*subW+lx;
-                    float cd  = cCross[idx];
-                    if (cd < zoneInner || cd > zoneOuter) continue;
-
-                    float dFromEdge = Mathf.Abs(cd - halfRoad);
-                    float tNorm     = Mathf.Clamp01(dFromEdge / capW);
-                    // Peak blend at road edge, zero at boundaries
-                    float blendW    = Mathf.Pow(Mathf.Cos(tNorm * Mathf.PI * 0.5f), 2f)
-                                      * ridgeCapStrength;
-                    if (blendW < 0.001f) continue;
-
-                    float ws = 0f, hs = 0f;
-                    for (int kz = -kRad; kz <= kRad; kz++)
+                    for (int lx = 0; lx < subW; lx++)
                     {
-                        int nz = lz+kz;
-                        if (nz < 0 || nz >= subH) continue;
-                        float dz = kz*wpz;
-                        for (int kx = -kRad; kx <= kRad; kx++)
+                        int idx = lz * subW + lx;
+                        float cd = cCross[idx];
+                        if (cd < zoneInner || cd > zoneOuter) continue;
+
+                        float dFromEdge = Mathf.Abs(cd - halfRoad);
+                        float tNorm = Mathf.Clamp01(dFromEdge / capW);
+                        // Peak blend at road edge, zero at boundaries
+                        float blendW = Mathf.Pow(Mathf.Cos(tNorm * Mathf.PI * 0.5f), 2f)
+                                          * ridgeCapStrength;
+                        if (blendW < 0.001f) continue;
+
+                        float ws = 0f, hs = 0f;
+                        for (int kz = -kRad; kz <= kRad; kz++)
                         {
-                            int nx = lx+kx;
-                            if (nx < 0 || nx >= subW) continue;
-                            float nc = cCross[nz*subW+nx];
-                            // Kernel only samples from inside the cap zone
-                            if (nc < zoneInner || nc > zoneOuter) continue;
+                            int nz = lz + kz;
+                            if (nz < 0 || nz >= subH) continue;
+                            float dz = kz * wpz;
+                            for (int kx = -kRad; kx <= kRad; kx++)
+                            {
+                                int nx = lx + kx;
+                                if (nx < 0 || nx >= subW) continue;
+                                float nc = cCross[nz * subW + nx];
+                                // Kernel only samples from inside the cap zone
+                                if (nc < zoneInner || nc > zoneOuter) continue;
                                 float dx2 = kx * wpx, d2 = dx2 * dx2 + dz * dz;
                                 float w = Mathf.Exp(-d2 / sig2);
                                 if (useAdvancedSmoothing && Mathf.Abs(ridgeCapVerticality) > 0.001f)
@@ -2925,10 +2998,10 @@ public class RoadPathGenerator : ModBehaviour
                                 }
                                 ws += w; hs += src[nz, nx] * w;
                             }
+                        }
+                        if (ws < 0.0001f) continue;
+                        dst[lz, lx] = Mathf.Lerp(src[lz, lx], hs / ws, blendW);
                     }
-                    if (ws < 0.0001f) continue;
-                    dst[lz, lx] = Mathf.Lerp(src[lz,lx], hs/ws, blendW);
-                }
 
                 td.SetHeights(pxMin, pzMin, dst);
             }
@@ -2945,9 +3018,9 @@ public class RoadPathGenerator : ModBehaviour
         if (terrain == null || shoulderSmoothPasses <= 0) return;
 
         TerrainData td = terrain.terrainData;
-        int   hw       = td.heightmapResolution;
-        float tW       = td.size.x, tH = td.size.z;
-        Vector3 tPos   = terrain.transform.position;
+        int hw = td.heightmapResolution;
+        float tW = td.size.x, tH = td.size.z;
+        Vector3 tPos = terrain.transform.position;
 
         float halfRoad = roadWidth * 0.5f;
         float ditchFloorEnd = halfRoad + ditchOffset + ditchInnerWidth + ditchBottomWidth;
@@ -2966,18 +3039,20 @@ public class RoadPathGenerator : ModBehaviour
         float outerEnd = generateDitch
             ? ditchFloorEnd + shoulderSmoothDistance
             : halfRoad + shoulderSmoothDistance;
-        float padded     = outerEnd + shoulderSmoothRadius;
+        float padded = outerEnd + shoulderSmoothRadius;
 
-        float minX=float.MaxValue,maxX=float.MinValue,minZ=float.MaxValue,maxZ=float.MinValue;
-        foreach(Vector3 p in pts)
-        { if(p.x-padded<minX)minX=p.x-padded; if(p.x+padded>maxX)maxX=p.x+padded;
-          if(p.z-padded<minZ)minZ=p.z-padded; if(p.z+padded>maxZ)maxZ=p.z+padded; }
-        int pxMin=Mathf.Clamp(Mathf.FloorToInt(((minX-tPos.x)/tW)*(hw-1)),0,hw-1);
-        int pxMax=Mathf.Clamp(Mathf.CeilToInt( ((maxX-tPos.x)/tW)*(hw-1)),0,hw-1);
-        int pzMin=Mathf.Clamp(Mathf.FloorToInt(((minZ-tPos.z)/tH)*(hw-1)),0,hw-1);
-        int pzMax=Mathf.Clamp(Mathf.CeilToInt( ((maxZ-tPos.z)/tH)*(hw-1)),0,hw-1);
-        int subW=pxMax-pxMin+1, subH=pzMax-pzMin+1;
-        float wpx=tW/(hw-1), wpz=tH/(hw-1);
+        float minX = float.MaxValue, maxX = float.MinValue, minZ = float.MaxValue, maxZ = float.MinValue;
+        foreach (Vector3 p in pts)
+        {
+            if (p.x - padded < minX) minX = p.x - padded; if (p.x + padded > maxX) maxX = p.x + padded;
+            if (p.z - padded < minZ) minZ = p.z - padded; if (p.z + padded > maxZ) maxZ = p.z + padded;
+        }
+        int pxMin = Mathf.Clamp(Mathf.FloorToInt(((minX - tPos.x) / tW) * (hw - 1)), 0, hw - 1);
+        int pxMax = Mathf.Clamp(Mathf.CeilToInt(((maxX - tPos.x) / tW) * (hw - 1)), 0, hw - 1);
+        int pzMin = Mathf.Clamp(Mathf.FloorToInt(((minZ - tPos.z) / tH) * (hw - 1)), 0, hw - 1);
+        int pzMax = Mathf.Clamp(Mathf.CeilToInt(((maxZ - tPos.z) / tH) * (hw - 1)), 0, hw - 1);
+        int subW = pxMax - pxMin + 1, subH = pzMax - pzMin + 1;
+        float wpx = tW / (hw - 1), wpz = tH / (hw - 1);
         int kRad = useAdvancedSmoothing
                        ? blurRadius
                        : Mathf.Max(1, Mathf.CeilToInt(shoulderSmoothRadius / Mathf.Min(wpx, wpz))) + 1;
@@ -3011,21 +3086,21 @@ public class RoadPathGenerator : ModBehaviour
         {
             float[,] src = td.GetHeights(pxMin, pzMin, subW, subH);
             float[,] dst = (float[,])src.Clone();
-            for (int lz=0;lz<subH;lz++) for (int lx=0;lx<subW;lx++)
-            {
-                float cd = cdCache[lz*subW+lx];
-                    if (cd < innerStart || cd > outerEnd) continue;
-                    float tO = (cd-halfRoad)/(outerEnd-halfRoad);
-                float bW = Mathf.Clamp01(1f - tO*tO*(3f-2f*tO));
-                if (bW < 0.001f) continue;
-                float ws=0f, hs=0f;
-                for (int kz=-kRad;kz<=kRad;kz++)
+            for (int lz = 0; lz < subH; lz++) for (int lx = 0; lx < subW; lx++)
                 {
-                    int nz=lz+kz; if(nz<0||nz>=subH) continue;
-                    float dz=kz*wpz;
-                    for (int kx=-kRad;kx<=kRad;kx++)
+                    float cd = cdCache[lz * subW + lx];
+                    if (cd < innerStart || cd > outerEnd) continue;
+                    float tO = (cd - halfRoad) / (outerEnd - halfRoad);
+                    float bW = Mathf.Clamp01(1f - tO * tO * (3f - 2f * tO));
+                    if (bW < 0.001f) continue;
+                    float ws = 0f, hs = 0f;
+                    for (int kz = -kRad; kz <= kRad; kz++)
                     {
-                        int nx=lx+kx; if(nx<0||nx>=subW) continue;
+                        int nz = lz + kz; if (nz < 0 || nz >= subH) continue;
+                        float dz = kz * wpz;
+                        for (int kx = -kRad; kx <= kRad; kx++)
+                        {
+                            int nx = lx + kx; if (nx < 0 || nx >= subW) continue;
                             if (cdCache[nz * subW + nx] < innerStart) continue;
                             float dx = kx * wpx, d2 = dx * dx + dz * dz;
                             float w = Mathf.Exp(-d2 / sig2x2);
@@ -3037,10 +3112,10 @@ public class RoadPathGenerator : ModBehaviour
                             }
                             ws += w; hs += src[nz, nx] * w;
                         }
+                    }
+                    if (ws < 0.0001f) continue;
+                    dst[lz, lx] = Mathf.Lerp(src[lz, lx], hs / ws, bW);
                 }
-                if (ws<0.0001f) continue;
-                dst[lz,lx] = Mathf.Lerp(src[lz,lx], hs/ws, bW);
-            }
             td.SetHeights(pxMin, pzMin, dst);
         }
     }
@@ -3084,291 +3159,291 @@ public class RoadPathGenerator : ModBehaviour
     //     never pull the berm or shoulder terrain downward.
     // ─────────────────────────────────────────────────────────
 
- /*   void ApplyDitchToTerrain(List<Vector3> pts)
-    {
-        Terrain terrain = Terrain.activeTerrain;
-        if (terrain == null) { Debug.LogWarning("[RoadPathGenerator] Ditch: no terrain."); return; }
-        if (pts.Count < 2) return;
+    /*   void ApplyDitchToTerrain(List<Vector3> pts)
+       {
+           Terrain terrain = Terrain.activeTerrain;
+           if (terrain == null) { Debug.LogWarning("[RoadPathGenerator] Ditch: no terrain."); return; }
+           if (pts.Count < 2) return;
 
-        TerrainData td = terrain.terrainData;
-        int   hw       = td.heightmapResolution;
-        float tW       = td.size.x, tH = td.size.z, tMaxY = td.size.y;
-        Vector3 tPos   = terrain.transform.position;
+           TerrainData td = terrain.terrainData;
+           int   hw       = td.heightmapResolution;
+           float tW       = td.size.x, tH = td.size.z, tMaxY = td.size.y;
+           Vector3 tPos   = terrain.transform.position;
 
-        float halfRoad   = roadWidth * 0.5f;
-        float zoneStart  = halfRoad + ditchOffset;           // inner wall top
-        float innerEnd   = zoneStart + ditchInnerWidth;      // floor start
-        float outerStart = innerEnd  + ditchBottomWidth;     // floor end
-        float zoneEnd    = outerStart + ditchOuterWidth;     // outer wall top
-        float padded     = zoneEnd + ditchSmoothRadius + 2f;
+           float halfRoad   = roadWidth * 0.5f;
+           float zoneStart  = halfRoad + ditchOffset;           // inner wall top
+           float innerEnd   = zoneStart + ditchInnerWidth;      // floor start
+           float outerStart = innerEnd  + ditchBottomWidth;     // floor end
+           float zoneEnd    = outerStart + ditchOuterWidth;     // outer wall top
+           float padded     = zoneEnd + ditchSmoothRadius + 2f;
 
-        // ── Endpoint tangents for end-cap rejection ───────────
-        // A pixel that projects to the very start of the spline is "before
-        // the start" if it lies on the negative side of the start tangent.
-        // Similarly for the end.  We use the first and last segment directions.
-        Vector2 startTangent = new Vector2(pts[1].x - pts[0].x, pts[1].z - pts[0].z).normalized;
-        Vector2 startOrigin  = new Vector2(pts[0].x, pts[0].z);
-        int     lastIdx      = pts.Count - 1;
-        Vector2 endTangent   = new Vector2(pts[lastIdx].x - pts[lastIdx-1].x,
-                                           pts[lastIdx].z - pts[lastIdx-1].z).normalized;
-        Vector2 endOrigin    = new Vector2(pts[lastIdx].x, pts[lastIdx].z);
+           // ── Endpoint tangents for end-cap rejection ───────────
+           // A pixel that projects to the very start of the spline is "before
+           // the start" if it lies on the negative side of the start tangent.
+           // Similarly for the end.  We use the first and last segment directions.
+           Vector2 startTangent = new Vector2(pts[1].x - pts[0].x, pts[1].z - pts[0].z).normalized;
+           Vector2 startOrigin  = new Vector2(pts[0].x, pts[0].z);
+           int     lastIdx      = pts.Count - 1;
+           Vector2 endTangent   = new Vector2(pts[lastIdx].x - pts[lastIdx-1].x,
+                                              pts[lastIdx].z - pts[lastIdx-1].z).normalized;
+           Vector2 endOrigin    = new Vector2(pts[lastIdx].x, pts[lastIdx].z);
 
-        // ── Bounding box ──────────────────────────────────────
-        float minX=float.MaxValue,maxX=float.MinValue;
-        float minZ=float.MaxValue,maxZ=float.MinValue;
-        foreach (Vector3 p in pts)
-        {
-            if(p.x-padded<minX)minX=p.x-padded; if(p.x+padded>maxX)maxX=p.x+padded;
-            if(p.z-padded<minZ)minZ=p.z-padded; if(p.z+padded>maxZ)maxZ=p.z+padded;
-        }
-        int pxMin=Mathf.Clamp(Mathf.FloorToInt(((minX-tPos.x)/tW)*(hw-1)),0,hw-1);
-        int pxMax=Mathf.Clamp(Mathf.CeilToInt( ((maxX-tPos.x)/tW)*(hw-1)),0,hw-1);
-        int pzMin=Mathf.Clamp(Mathf.FloorToInt(((minZ-tPos.z)/tH)*(hw-1)),0,hw-1);
-        int pzMax=Mathf.Clamp(Mathf.CeilToInt( ((maxZ-tPos.z)/tH)*(hw-1)),0,hw-1);
-        int subW=pxMax-pxMin+1, subH=pzMax-pzMin+1;
-        float wpx=tW/(hw-1), wpz=tH/(hw-1);
+           // ── Bounding box ──────────────────────────────────────
+           float minX=float.MaxValue,maxX=float.MinValue;
+           float minZ=float.MaxValue,maxZ=float.MinValue;
+           foreach (Vector3 p in pts)
+           {
+               if(p.x-padded<minX)minX=p.x-padded; if(p.x+padded>maxX)maxX=p.x+padded;
+               if(p.z-padded<minZ)minZ=p.z-padded; if(p.z+padded>maxZ)maxZ=p.z+padded;
+           }
+           int pxMin=Mathf.Clamp(Mathf.FloorToInt(((minX-tPos.x)/tW)*(hw-1)),0,hw-1);
+           int pxMax=Mathf.Clamp(Mathf.CeilToInt( ((maxX-tPos.x)/tW)*(hw-1)),0,hw-1);
+           int pzMin=Mathf.Clamp(Mathf.FloorToInt(((minZ-tPos.z)/tH)*(hw-1)),0,hw-1);
+           int pzMax=Mathf.Clamp(Mathf.CeilToInt( ((maxZ-tPos.z)/tH)*(hw-1)),0,hw-1);
+           int subW=pxMax-pxMin+1, subH=pzMax-pzMin+1;
+           float wpx=tW/(hw-1), wpz=tH/(hw-1);
 
-        // ── Spline height array (current terrain after all prior passes) ──
-        float[] splineH = new float[pts.Count];
-        for (int i=0;i<pts.Count;i++) splineH[i] = terrain.SampleHeight(pts[i]) + tPos.y;
+           // ── Spline height array (current terrain after all prior passes) ──
+           float[] splineH = new float[pts.Count];
+           for (int i=0;i<pts.Count;i++) splineH[i] = terrain.SampleHeight(pts[i]) + tPos.y;
 
-        // ── Per-pixel cache ───────────────────────────────────
-        //  For each pixel we store:
-        //    cdCache   - unsigned cross-track distance
-        //    refHCache - terrain height at the inner-wall-start position
-        //                (the correct depth reference, computed once here)
-        //    validCache- whether this pixel should be processed at all
-        //
-        //  refH is found by:
-        //    a) Finding the nearest point on the spline (bestPt in XZ)
-        //    b) Computing the outward unit direction: normalize(pixel - bestPt)
-        //    c) Stepping outward by zoneStart from bestPt to get innerWallXZ
-        //    d) Sampling terrain.SampleHeight at innerWallXZ
-        //
-        //  This is geometrically correct regardless of spline curvature or
-        //  road width, and produces a continuously smooth refH along the ditch.
+           // ── Per-pixel cache ───────────────────────────────────
+           //  For each pixel we store:
+           //    cdCache   - unsigned cross-track distance
+           //    refHCache - terrain height at the inner-wall-start position
+           //                (the correct depth reference, computed once here)
+           //    validCache- whether this pixel should be processed at all
+           //
+           //  refH is found by:
+           //    a) Finding the nearest point on the spline (bestPt in XZ)
+           //    b) Computing the outward unit direction: normalize(pixel - bestPt)
+           //    c) Stepping outward by zoneStart from bestPt to get innerWallXZ
+           //    d) Sampling terrain.SampleHeight at innerWallXZ
+           //
+           //  This is geometrically correct regardless of spline curvature or
+           //  road width, and produces a continuously smooth refH along the ditch.
 
-        float[] cdCache   = new float[subW * subH];
-        float[] refHCache = new float[subW * subH];
-        bool[]  validCache = new bool[subW * subH];
+           float[] cdCache   = new float[subW * subH];
+           float[] refHCache = new float[subW * subH];
+           bool[]  validCache = new bool[subW * subH];
 
-        for (int lz = 0; lz < subH; lz++)
-            for (int lx = 0; lx < subW; lx++)
-            {
-                int idx = lz * subW + lx;
-                float wx = tPos.x + ((pxMin + lx) / (float)(hw - 1)) * tW;
-                float wz = tPos.z + ((pzMin + lz) / (float)(hw - 1)) * tH;
-                Vector2 pq = new Vector2(wx, wz);
+           for (int lz = 0; lz < subH; lz++)
+               for (int lx = 0; lx < subW; lx++)
+               {
+                   int idx = lz * subW + lx;
+                   float wx = tPos.x + ((pxMin + lx) / (float)(hw - 1)) * tW;
+                   float wz = tPos.z + ((pzMin + lz) / (float)(hw - 1)) * tH;
+                   Vector2 pq = new Vector2(wx, wz);
 
-                // ── End-cap rejection ─────────────────────────────
-                // Still needs its own segment search to find bestSeg and bestT
-                // for the endpoint tangent dot-product tests.
-                float bestDist = float.MaxValue;
-                int bestSeg = 0;
-                float bestT = 0f;
-                Vector2 bestPt = Vector2.zero;
-                for (int i = 0; i < pts.Count - 1; i++)
-                {
-                    Vector2 a = new Vector2(pts[i].x, pts[i].z);
-                    Vector2 b = new Vector2(pts[i + 1].x, pts[i + 1].z);
-                    float t;
-                    float d = ClosestPointOnSegment2D(pq, a, b, out t);
-                    if (d < bestDist) { bestDist = d; bestSeg = i; bestT = t; bestPt = a + (b - a) * t; }
-                }
+                   // ── End-cap rejection ─────────────────────────────
+                   // Still needs its own segment search to find bestSeg and bestT
+                   // for the endpoint tangent dot-product tests.
+                   float bestDist = float.MaxValue;
+                   int bestSeg = 0;
+                   float bestT = 0f;
+                   Vector2 bestPt = Vector2.zero;
+                   for (int i = 0; i < pts.Count - 1; i++)
+                   {
+                       Vector2 a = new Vector2(pts[i].x, pts[i].z);
+                       Vector2 b = new Vector2(pts[i + 1].x, pts[i + 1].z);
+                       float t;
+                       float d = ClosestPointOnSegment2D(pq, a, b, out t);
+                       if (d < bestDist) { bestDist = d; bestSeg = i; bestT = t; bestPt = a + (b - a) * t; }
+                   }
 
-                Vector2 toPixelFromStart = pq - startOrigin;
-                if (bestSeg == 0 && bestT < 0.01f &&
-                    Vector2.Dot(toPixelFromStart, startTangent) < 0f)
-                { cdCache[idx] = float.MaxValue; continue; }
+                   Vector2 toPixelFromStart = pq - startOrigin;
+                   if (bestSeg == 0 && bestT < 0.01f &&
+                       Vector2.Dot(toPixelFromStart, startTangent) < 0f)
+                   { cdCache[idx] = float.MaxValue; continue; }
 
-                Vector2 toPixelFromEnd = pq - endOrigin;
-                if (bestSeg == pts.Count - 2 && bestT > 0.99f &&
-                    Vector2.Dot(toPixelFromEnd, endTangent) > 0f)
-                { cdCache[idx] = float.MaxValue; continue; }
+                   Vector2 toPixelFromEnd = pq - endOrigin;
+                   if (bestSeg == pts.Count - 2 && bestT > 0.99f &&
+                       Vector2.Dot(toPixelFromEnd, endTangent) > 0f)
+                   { cdCache[idx] = float.MaxValue; continue; }
 
-                // ── Distance field lookup ─────────────────────────
-                // Use pre-baked blurred crossDist so ditch zone boundaries
-                // align exactly with flatten zone boundaries — no misaligned
-                // shelf between the two passes.
-                float crossDist;
-                float signedCross;
-                if (_distField != null)
-                {
-                    crossDist = _distField.SampleCross(wx, wz);
-                    signedCross = _distField.SampleSigned(wx, wz);
-                    // Fall back if pixel is outside field bounds
-                    if (crossDist > 999999f)
-                    {
-                        Vector2 currDir2 = SegDir2D(pts, bestSeg);
-                        Vector2 prevDir2 = bestSeg > 0 ? SegDir2D(pts, bestSeg - 1) : currDir2;
-                        Vector2 nextDir2 = bestSeg < pts.Count - 2 ? SegDir2D(pts, bestSeg + 1) : currDir2;
-                        Vector2 tang2 = bestT < 0.5f
-                            ? Vector2.Lerp((prevDir2 + currDir2) * 0.5f, currDir2, bestT * 2f)
-                            : Vector2.Lerp(currDir2, (currDir2 + nextDir2) * 0.5f, (bestT - 0.5f) * 2f);
-                        tang2.Normalize();
-                        Vector2 rr2 = new Vector2(-tang2.y, tang2.x);
-                        signedCross = Vector2.Dot(pq - bestPt, rr2);
-                        crossDist = Mathf.Abs(signedCross);
-                    }
-                }
-                else
-                {
-                    Vector2 currDir = SegDir2D(pts, bestSeg);
-                    Vector2 prevDir = bestSeg > 0 ? SegDir2D(pts, bestSeg - 1) : currDir;
-                    Vector2 nextDir = bestSeg < pts.Count - 2 ? SegDir2D(pts, bestSeg + 1) : currDir;
-                    Vector2 tangent = bestT < 0.5f
-                        ? Vector2.Lerp((prevDir + currDir) * 0.5f, currDir, bestT * 2f)
-                        : Vector2.Lerp(currDir, (currDir + nextDir) * 0.5f, (bestT - 0.5f) * 2f);
-                    tangent.Normalize();
-                    Vector2 roadRight2 = new Vector2(-tangent.y, tangent.x);
-                    signedCross = Vector2.Dot(pq - bestPt, roadRight2);
-                    crossDist = Mathf.Abs(signedCross);
-                }
+                   // ── Distance field lookup ─────────────────────────
+                   // Use pre-baked blurred crossDist so ditch zone boundaries
+                   // align exactly with flatten zone boundaries — no misaligned
+                   // shelf between the two passes.
+                   float crossDist;
+                   float signedCross;
+                   if (_distField != null)
+                   {
+                       crossDist = _distField.SampleCross(wx, wz);
+                       signedCross = _distField.SampleSigned(wx, wz);
+                       // Fall back if pixel is outside field bounds
+                       if (crossDist > 999999f)
+                       {
+                           Vector2 currDir2 = SegDir2D(pts, bestSeg);
+                           Vector2 prevDir2 = bestSeg > 0 ? SegDir2D(pts, bestSeg - 1) : currDir2;
+                           Vector2 nextDir2 = bestSeg < pts.Count - 2 ? SegDir2D(pts, bestSeg + 1) : currDir2;
+                           Vector2 tang2 = bestT < 0.5f
+                               ? Vector2.Lerp((prevDir2 + currDir2) * 0.5f, currDir2, bestT * 2f)
+                               : Vector2.Lerp(currDir2, (currDir2 + nextDir2) * 0.5f, (bestT - 0.5f) * 2f);
+                           tang2.Normalize();
+                           Vector2 rr2 = new Vector2(-tang2.y, tang2.x);
+                           signedCross = Vector2.Dot(pq - bestPt, rr2);
+                           crossDist = Mathf.Abs(signedCross);
+                       }
+                   }
+                   else
+                   {
+                       Vector2 currDir = SegDir2D(pts, bestSeg);
+                       Vector2 prevDir = bestSeg > 0 ? SegDir2D(pts, bestSeg - 1) : currDir;
+                       Vector2 nextDir = bestSeg < pts.Count - 2 ? SegDir2D(pts, bestSeg + 1) : currDir;
+                       Vector2 tangent = bestT < 0.5f
+                           ? Vector2.Lerp((prevDir + currDir) * 0.5f, currDir, bestT * 2f)
+                           : Vector2.Lerp(currDir, (currDir + nextDir) * 0.5f, (bestT - 0.5f) * 2f);
+                       tangent.Normalize();
+                       Vector2 roadRight2 = new Vector2(-tangent.y, tangent.x);
+                       signedCross = Vector2.Dot(pq - bestPt, roadRight2);
+                       crossDist = Mathf.Abs(signedCross);
+                   }
 
-                cdCache[idx] = crossDist;
-                if (crossDist < zoneStart || crossDist > zoneEnd + 1f) continue;
+                   cdCache[idx] = crossDist;
+                   if (crossDist < zoneStart || crossDist > zoneEnd + 1f) continue;
 
-                // ── Inner-wall reference height ───────────────────
-                // Derive road-right direction from signedCross and bestPt
-                // so the inner wall sample position is geometrically correct.
-                float side = signedCross >= 0f ? 1f : -1f;
-                Vector2 outwardDir = (pq - new Vector2(bestPt.x, bestPt.y));
-                if (outwardDir.sqrMagnitude < 0.0001f)
-                {
-                    Vector2 cd2 = SegDir2D(pts, bestSeg);
-                    outwardDir = new Vector2(-cd2.y, cd2.x) * side;
-                }
-                outwardDir.Normalize();
-                Vector2 innerWallXZ = new Vector2(bestPt.x, bestPt.y)
-                                      + outwardDir * (side >= 0f ? zoneStart : -zoneStart);
+                   // ── Inner-wall reference height ───────────────────
+                   // Derive road-right direction from signedCross and bestPt
+                   // so the inner wall sample position is geometrically correct.
+                   float side = signedCross >= 0f ? 1f : -1f;
+                   Vector2 outwardDir = (pq - new Vector2(bestPt.x, bestPt.y));
+                   if (outwardDir.sqrMagnitude < 0.0001f)
+                   {
+                       Vector2 cd2 = SegDir2D(pts, bestSeg);
+                       outwardDir = new Vector2(-cd2.y, cd2.x) * side;
+                   }
+                   outwardDir.Normalize();
+                   Vector2 innerWallXZ = new Vector2(bestPt.x, bestPt.y)
+                                         + outwardDir * (side >= 0f ? zoneStart : -zoneStart);
 
-                Vector3 innerSample = new Vector3(innerWallXZ.x, 0f, innerWallXZ.y);
-                innerSample.x = Mathf.Clamp(innerSample.x, tPos.x, tPos.x + tW);
-                innerSample.z = Mathf.Clamp(innerSample.z, tPos.z, tPos.z + tH);
-                float refH = terrain.SampleHeight(innerSample) + tPos.y;
+                   Vector3 innerSample = new Vector3(innerWallXZ.x, 0f, innerWallXZ.y);
+                   innerSample.x = Mathf.Clamp(innerSample.x, tPos.x, tPos.x + tW);
+                   innerSample.z = Mathf.Clamp(innerSample.z, tPos.z, tPos.z + tH);
+                   float refH = terrain.SampleHeight(innerSample) + tPos.y;
 
-                refHCache[idx] = refH;
-                validCache[idx] = true;
-            }
+                   refHCache[idx] = refH;
+                   validCache[idx] = true;
+               }
 
-        float[,] heights = td.GetHeights(pxMin, pzMin, subW, subH);
+           float[,] heights = td.GetHeights(pxMin, pzMin, subW, subH);
 
-        // ── Carve pass ───────────────────────────────────────
-        for (int lz=0;lz<subH;lz++)
-        for (int lx=0;lx<subW;lx++)
-        {
-            int   idx = lz*subW+lx;
-            float cd  = cdCache[idx];
-            if (!validCache[idx] || cd < zoneStart || cd > zoneEnd) continue;
+           // ── Carve pass ───────────────────────────────────────
+           for (int lz=0;lz<subH;lz++)
+           for (int lx=0;lx<subW;lx++)
+           {
+               int   idx = lz*subW+lx;
+               float cd  = cdCache[idx];
+               if (!validCache[idx] || cd < zoneStart || cd > zoneEnd) continue;
 
-            float refH = refHCache[idx];
+               float refH = refHCache[idx];
 
-            // ── Depth fraction based on sub-zone ─────────────
-            float depthFrac;
-            if (cd <= innerEnd)
-            {
-                // Descending inner wall: 0 at top → 1 at floor
-                float t = Mathf.Clamp01((cd - zoneStart) / Mathf.Max(0.001f, ditchInnerWidth));
-                float tS = t*t*(3f - 2f*t);
-                depthFrac = Mathf.Lerp(t, tS, ditchCurvature);
-            }
-            else if (cd <= outerStart)
-            {
-                // Flat floor
-                depthFrac = 1f;
-            }
-            else
-            {
-                // Rising outer wall: 1 at floor → 0 at top
-                float t = Mathf.Clamp01((cd - outerStart) / Mathf.Max(0.001f, ditchOuterWidth));
-                float tS = t*t*(3f - 2f*t);
-                depthFrac = 1f - Mathf.Lerp(t, tS, ditchCurvature);
-            }
+               // ── Depth fraction based on sub-zone ─────────────
+               float depthFrac;
+               if (cd <= innerEnd)
+               {
+                   // Descending inner wall: 0 at top → 1 at floor
+                   float t = Mathf.Clamp01((cd - zoneStart) / Mathf.Max(0.001f, ditchInnerWidth));
+                   float tS = t*t*(3f - 2f*t);
+                   depthFrac = Mathf.Lerp(t, tS, ditchCurvature);
+               }
+               else if (cd <= outerStart)
+               {
+                   // Flat floor
+                   depthFrac = 1f;
+               }
+               else
+               {
+                   // Rising outer wall: 1 at floor → 0 at top
+                   float t = Mathf.Clamp01((cd - outerStart) / Mathf.Max(0.001f, ditchOuterWidth));
+                   float tS = t*t*(3f - 2f*t);
+                   depthFrac = 1f - Mathf.Lerp(t, tS, ditchCurvature);
+               }
 
-            // ── Target height ─────────────────────────────────
-            float targetH    = refH - depthFrac * ditchDepth;
-            float targetNorm = Mathf.Clamp01((targetH - tPos.y) / tMaxY);
+               // ── Target height ─────────────────────────────────
+               float targetH    = refH - depthFrac * ditchDepth;
+               float targetNorm = Mathf.Clamp01((targetH - tPos.y) / tMaxY);
 
-            // Apply with ditchStrength; safety: never raise terrain above what
-            // it already is (ditch should only ever cut downward).
-            float currentH   = heights[lz, lx];
-            float blended    = Mathf.Lerp(currentH, targetNorm, ditchStrength);
-            heights[lz, lx]  = Mathf.Min(currentH, blended);
-        }
+               // Apply with ditchStrength; safety: never raise terrain above what
+               // it already is (ditch should only ever cut downward).
+               float currentH   = heights[lz, lx];
+               float blended    = Mathf.Lerp(currentH, targetNorm, ditchStrength);
+               heights[lz, lx]  = Mathf.Min(currentH, blended);
+           }
 
-        td.SetHeights(pxMin, pzMin, heights);
+           td.SetHeights(pxMin, pzMin, heights);
 
-        // ── Smoothing passes (zone-confined Gaussian) ─────────
-        if (ditchSmoothPasses > 0)
-        {
-            int kRad = useAdvancedSmoothing
-                         ? blurRadius
-                         : Mathf.Max(1, Mathf.CeilToInt(ditchSmoothRadius / Mathf.Min(wpx, wpz))) + 1;
-            float sig = useAdvancedSmoothing
-                         ? blurRadius * Mathf.Min(wpx, wpz) * 0.5f
-                         : ditchSmoothRadius * 0.5f;
-            float sig2 = 2f * sig * sig;
+           // ── Smoothing passes (zone-confined Gaussian) ─────────
+           if (ditchSmoothPasses > 0)
+           {
+               int kRad = useAdvancedSmoothing
+                            ? blurRadius
+                            : Mathf.Max(1, Mathf.CeilToInt(ditchSmoothRadius / Mathf.Min(wpx, wpz))) + 1;
+               float sig = useAdvancedSmoothing
+                            ? blurRadius * Mathf.Min(wpx, wpz) * 0.5f
+                            : ditchSmoothRadius * 0.5f;
+               float sig2 = 2f * sig * sig;
 
-            for (int pass=0; pass<ditchSmoothPasses; pass++)
-            {
-                float[,] src = td.GetHeights(pxMin, pzMin, subW, subH);
-                float[,] dst = (float[,])src.Clone();
+               for (int pass=0; pass<ditchSmoothPasses; pass++)
+               {
+                   float[,] src = td.GetHeights(pxMin, pzMin, subW, subH);
+                   float[,] dst = (float[,])src.Clone();
 
-                for (int lz=0;lz<subH;lz++)
-                for (int lx=0;lx<subW;lx++)
-                {
-                    int   idx = lz*subW+lx;
-                    float cd  = cdCache[idx];
-                    if (!validCache[idx] || cd < zoneStart || cd > zoneEnd) continue;
+                   for (int lz=0;lz<subH;lz++)
+                   for (int lx=0;lx<subW;lx++)
+                   {
+                       int   idx = lz*subW+lx;
+                       float cd  = cdCache[idx];
+                       if (!validCache[idx] || cd < zoneStart || cd > zoneEnd) continue;
 
-                    // Blend weight peaks at ditch floor, tapers at zone edges
-                    float blendW;
-                    if (cd <= innerEnd)
-                        blendW = Mathf.Clamp01((cd - zoneStart) /
-                                               Mathf.Max(0.001f, ditchInnerWidth));
-                    else if (cd <= outerStart)
-                        blendW = 1f;
-                    else
-                        blendW = Mathf.Clamp01(1f - (cd - outerStart) /
-                                               Mathf.Max(0.001f, ditchOuterWidth));
+                       // Blend weight peaks at ditch floor, tapers at zone edges
+                       float blendW;
+                       if (cd <= innerEnd)
+                           blendW = Mathf.Clamp01((cd - zoneStart) /
+                                                  Mathf.Max(0.001f, ditchInnerWidth));
+                       else if (cd <= outerStart)
+                           blendW = 1f;
+                       else
+                           blendW = Mathf.Clamp01(1f - (cd - outerStart) /
+                                                  Mathf.Max(0.001f, ditchOuterWidth));
 
-                    if (blendW < 0.001f) continue;
+                       if (blendW < 0.001f) continue;
 
-                    float ws=0f, hs=0f;
-                    for (int kz=-kRad;kz<=kRad;kz++)
-                    {
-                        int nz=lz+kz; if(nz<0||nz>=subH) continue;
-                        float dz=kz*wpz;
-                        for (int kx=-kRad;kx<=kRad;kx++)
-                        {
-                            int nx=lx+kx; if(nx<0||nx>=subW) continue;
-                            float nc = cdCache[nz*subW+nx];
-                            // Allow kernel to sample slightly outside zone so
-                            // zone-edge pixels have full, unbiased kernels
-                            if (nc > zoneEnd + ditchSmoothRadius) continue;
-                            if (nc < zoneStart - ditchSmoothRadius * 0.5f) continue;
-                                float dx = kx * wpx, d2 = dx * dx + dz * dz;
-                                float w = Mathf.Exp(-d2 / sig2);
-                                if (useAdvancedSmoothing && Mathf.Abs(ditchVerticality) > 0.001f)
-                                {
-                                    float heightDiff = src[nz, nx] - src[lz, lx];
-                                    float vBias = 1f + ditchVerticality * Mathf.Sign(heightDiff);
-                                    w *= Mathf.Max(0.001f, vBias);
-                                }
-                                ws += w; hs += src[nz, nx] * w;
-                            }
-                        }
-                        if (ws < 0.0001f) continue;
-                        // Keep the cut-only constraint during smoothing too
-                        float smoothed = Mathf.Lerp(src[lz, lx], hs / ws, blendW);
-                        dst[lz,lx] = Mathf.Min(src[lz,lx], smoothed);
-                }
+                       float ws=0f, hs=0f;
+                       for (int kz=-kRad;kz<=kRad;kz++)
+                       {
+                           int nz=lz+kz; if(nz<0||nz>=subH) continue;
+                           float dz=kz*wpz;
+                           for (int kx=-kRad;kx<=kRad;kx++)
+                           {
+                               int nx=lx+kx; if(nx<0||nx>=subW) continue;
+                               float nc = cdCache[nz*subW+nx];
+                               // Allow kernel to sample slightly outside zone so
+                               // zone-edge pixels have full, unbiased kernels
+                               if (nc > zoneEnd + ditchSmoothRadius) continue;
+                               if (nc < zoneStart - ditchSmoothRadius * 0.5f) continue;
+                                   float dx = kx * wpx, d2 = dx * dx + dz * dz;
+                                   float w = Mathf.Exp(-d2 / sig2);
+                                   if (useAdvancedSmoothing && Mathf.Abs(ditchVerticality) > 0.001f)
+                                   {
+                                       float heightDiff = src[nz, nx] - src[lz, lx];
+                                       float vBias = 1f + ditchVerticality * Mathf.Sign(heightDiff);
+                                       w *= Mathf.Max(0.001f, vBias);
+                                   }
+                                   ws += w; hs += src[nz, nx] * w;
+                               }
+                           }
+                           if (ws < 0.0001f) continue;
+                           // Keep the cut-only constraint during smoothing too
+                           float smoothed = Mathf.Lerp(src[lz, lx], hs / ws, blendW);
+                           dst[lz,lx] = Mathf.Min(src[lz,lx], smoothed);
+                   }
 
-                td.SetHeights(pxMin, pzMin, dst);
-            }
-        }
-    }
- */
+                   td.SetHeights(pxMin, pzMin, dst);
+               }
+           }
+       }
+    */
     // ─────────────────────────────────────────────────────────
     //  Terrain – Road Edge to Ditch Transition
     // ─────────────────────────────────────────────────────────
@@ -3390,121 +3465,121 @@ public class RoadPathGenerator : ModBehaviour
     //  with no visible kink at either boundary.
     // ─────────────────────────────────────────────────────────
 
- /*   void SmoothRoadToDitchTransition(List<Vector3> pts)
-    {
-        if (pts.Count < 2) return;
-        Terrain terrain = Terrain.activeTerrain;
-        if (terrain == null) return;
+    /*   void SmoothRoadToDitchTransition(List<Vector3> pts)
+       {
+           if (pts.Count < 2) return;
+           Terrain terrain = Terrain.activeTerrain;
+           if (terrain == null) return;
 
-        TerrainData td = terrain.terrainData;
-        int hw = td.heightmapResolution;
-        float tW = td.size.x, tH = td.size.z, tMaxY = td.size.y;
-        Vector3 tPos = terrain.transform.position;
+           TerrainData td = terrain.terrainData;
+           int hw = td.heightmapResolution;
+           float tW = td.size.x, tH = td.size.z, tMaxY = td.size.y;
+           Vector3 tPos = terrain.transform.position;
 
-        float halfRoad = roadWidth * 0.5f;
-        float ditchTopDist = halfRoad + ditchOffset;   // outer edge of transition strip
-        float stripWidth = ditchOffset;               // width of the strip to operate on
-        float padded = ditchTopDist + 1f;
+           float halfRoad = roadWidth * 0.5f;
+           float ditchTopDist = halfRoad + ditchOffset;   // outer edge of transition strip
+           float stripWidth = ditchOffset;               // width of the strip to operate on
+           float padded = ditchTopDist + 1f;
 
-        if (stripWidth < 0.001f) return;
+           if (stripWidth < 0.001f) return;
 
-        // ── Bounding box ──────────────────────────────────────
-        float minX = float.MaxValue, maxX = float.MinValue;
-        float minZ = float.MaxValue, maxZ = float.MinValue;
-        foreach (Vector3 p in pts)
-        {
-            if (p.x - padded < minX) minX = p.x - padded; if (p.x + padded > maxX) maxX = p.x + padded;
-            if (p.z - padded < minZ) minZ = p.z - padded; if (p.z + padded > maxZ) maxZ = p.z + padded;
-        }
-        int pxMin = Mathf.Clamp(Mathf.FloorToInt(((minX - tPos.x) / tW) * (hw - 1)), 0, hw - 1);
-        int pxMax = Mathf.Clamp(Mathf.CeilToInt(((maxX - tPos.x) / tW) * (hw - 1)), 0, hw - 1);
-        int pzMin = Mathf.Clamp(Mathf.FloorToInt(((minZ - tPos.z) / tH) * (hw - 1)), 0, hw - 1);
-        int pzMax = Mathf.Clamp(Mathf.CeilToInt(((maxZ - tPos.z) / tH) * (hw - 1)), 0, hw - 1);
-        int subW = pxMax - pxMin + 1, subH = pzMax - pzMin + 1;
+           // ── Bounding box ──────────────────────────────────────
+           float minX = float.MaxValue, maxX = float.MinValue;
+           float minZ = float.MaxValue, maxZ = float.MinValue;
+           foreach (Vector3 p in pts)
+           {
+               if (p.x - padded < minX) minX = p.x - padded; if (p.x + padded > maxX) maxX = p.x + padded;
+               if (p.z - padded < minZ) minZ = p.z - padded; if (p.z + padded > maxZ) maxZ = p.z + padded;
+           }
+           int pxMin = Mathf.Clamp(Mathf.FloorToInt(((minX - tPos.x) / tW) * (hw - 1)), 0, hw - 1);
+           int pxMax = Mathf.Clamp(Mathf.CeilToInt(((maxX - tPos.x) / tW) * (hw - 1)), 0, hw - 1);
+           int pzMin = Mathf.Clamp(Mathf.FloorToInt(((minZ - tPos.z) / tH) * (hw - 1)), 0, hw - 1);
+           int pzMax = Mathf.Clamp(Mathf.CeilToInt(((maxZ - tPos.z) / tH) * (hw - 1)), 0, hw - 1);
+           int subW = pxMax - pxMin + 1, subH = pzMax - pzMin + 1;
 
-        // ── Build spline height array ─────────────────────────
-        float[] splineH = new float[pts.Count];
-        for (int i = 0; i < pts.Count; i++)
-            splineH[i] = terrain.SampleHeight(pts[i]) + tPos.y;
+           // ── Build spline height array ─────────────────────────
+           float[] splineH = new float[pts.Count];
+           for (int i = 0; i < pts.Count; i++)
+               splineH[i] = terrain.SampleHeight(pts[i]) + tPos.y;
 
-        float[,] heights = td.GetHeights(pxMin, pzMin, subW, subH);
+           float[,] heights = td.GetHeights(pxMin, pzMin, subW, subH);
 
-        for (int lz = 0; lz < subH; lz++)
-            for (int lx = 0; lx < subW; lx++)
-            {
-                float wx = tPos.x + ((pxMin + lx) / (float)(hw - 1)) * tW;
-                float wz = tPos.z + ((pzMin + lz) / (float)(hw - 1)) * tH;
+           for (int lz = 0; lz < subH; lz++)
+               for (int lx = 0; lx < subW; lx++)
+               {
+                   float wx = tPos.x + ((pxMin + lx) / (float)(hw - 1)) * tW;
+                   float wz = tPos.z + ((pzMin + lz) / (float)(hw - 1)) * tH;
 
-                float interpH, sc;
-                float cd = ClosestPointOnSplineXZ(wx, wz, pts, splineH, out interpH, out sc);
+                   float interpH, sc;
+                   float cd = ClosestPointOnSplineXZ(wx, wz, pts, splineH, out interpH, out sc);
 
-                // Only operate inside the transition strip
-                if (cd < halfRoad || cd > ditchTopDist) continue;
+                   // Only operate inside the transition strip
+                   if (cd < halfRoad || cd > ditchTopDist) continue;
 
-                // ── Inner anchor: height at the road edge ─────────
-                // Step inward from the current pixel to the road edge
-                // and sample the terrain there — this is the height the
-                // flat road surface was written to by the flatten pass.
-                float innerAnchorH = terrain.SampleHeight(
-                    new Vector3(wx, 0f, wz)) + tPos.y;
-                // Re-sample closer to road edge for a cleaner anchor
-                Vector3 towardCentre = new Vector3(wx, 0f, wz);
-                // The road edge anchor is just the current flattened
-                // road surface height at the projected centreline point
-                // adjusted for camber at the edge.
-                float cSlope = Mathf.Sin(camberDegrees * Mathf.Deg2Rad);
-                float roadEdgeH = interpH - cSlope * Mathf.Clamp(sc, -halfRoad, halfRoad);
+                   // ── Inner anchor: height at the road edge ─────────
+                   // Step inward from the current pixel to the road edge
+                   // and sample the terrain there — this is the height the
+                   // flat road surface was written to by the flatten pass.
+                   float innerAnchorH = terrain.SampleHeight(
+                       new Vector3(wx, 0f, wz)) + tPos.y;
+                   // Re-sample closer to road edge for a cleaner anchor
+                   Vector3 towardCentre = new Vector3(wx, 0f, wz);
+                   // The road edge anchor is just the current flattened
+                   // road surface height at the projected centreline point
+                   // adjusted for camber at the edge.
+                   float cSlope = Mathf.Sin(camberDegrees * Mathf.Deg2Rad);
+                   float roadEdgeH = interpH - cSlope * Mathf.Clamp(sc, -halfRoad, halfRoad);
 
-                // ── Outer anchor: height at the ditch inner wall top ──
-                // Step outward from the spline projection point to
-                // ditchTopDist and sample terrain there — this is what
-                // the ditch carve left at the top of the inner wall.
-                Vector2 proj2D = new Vector2(wx, wz);
+                   // ── Outer anchor: height at the ditch inner wall top ──
+                   // Step outward from the spline projection point to
+                   // ditchTopDist and sample terrain there — this is what
+                   // the ditch carve left at the top of the inner wall.
+                   Vector2 proj2D = new Vector2(wx, wz);
 
-                // Find the perpendicular outward direction at this pixel
-                Vector2 q = new Vector2(wx, wz);
-                int bSeg = 0; float bT = 0f; Vector2 bPt = Vector2.zero;
-                float bestD = float.MaxValue;
-                for (int ii = 0; ii < pts.Count - 1; ii++)
-                {
-                    Vector2 a2 = new Vector2(pts[ii].x, pts[ii].z);
-                    Vector2 b2 = new Vector2(pts[ii + 1].x, pts[ii + 1].z);
-                    float ttt;
-                    float dd = ClosestPointOnSegment2D(q, a2, b2, out ttt);
-                    if (dd < bestD) { bestD = dd; bSeg = ii; bT = ttt; bPt = a2 + (b2 - a2) * ttt; }
-                }
-                Vector2 cDir = SegDir2D(pts, bSeg);
-                Vector2 pDir = bSeg > 0 ? SegDir2D(pts, bSeg - 1) : cDir;
-                Vector2 nDir = bSeg < pts.Count - 2 ? SegDir2D(pts, bSeg + 1) : cDir;
-                Vector2 tang = bT < 0.5f
-                    ? Vector2.Lerp((pDir + cDir) * 0.5f, cDir, bT * 2f)
-                    : Vector2.Lerp(cDir, (cDir + nDir) * 0.5f, (bT - 0.5f) * 2f);
-                tang.Normalize();
-                Vector2 roadRight = new Vector2(-tang.y, tang.x);
-                float side = Vector2.Dot(q - bPt, roadRight) >= 0f ? 1f : -1f;
-                // Step outward by ditchTopDist to find the outer anchor
-                Vector2 outerXZ = new Vector2(bPt.x, bPt.y) + roadRight * (side * ditchTopDist);
-                Vector3 outerSample = new Vector3(
-                    Mathf.Clamp(outerXZ.x, tPos.x, tPos.x + tW),
-                    0f,
-                    Mathf.Clamp(outerXZ.y, tPos.z, tPos.z + tH));
-                float ditchTopH = terrain.SampleHeight(outerSample) + tPos.y;
+                   // Find the perpendicular outward direction at this pixel
+                   Vector2 q = new Vector2(wx, wz);
+                   int bSeg = 0; float bT = 0f; Vector2 bPt = Vector2.zero;
+                   float bestD = float.MaxValue;
+                   for (int ii = 0; ii < pts.Count - 1; ii++)
+                   {
+                       Vector2 a2 = new Vector2(pts[ii].x, pts[ii].z);
+                       Vector2 b2 = new Vector2(pts[ii + 1].x, pts[ii + 1].z);
+                       float ttt;
+                       float dd = ClosestPointOnSegment2D(q, a2, b2, out ttt);
+                       if (dd < bestD) { bestD = dd; bSeg = ii; bT = ttt; bPt = a2 + (b2 - a2) * ttt; }
+                   }
+                   Vector2 cDir = SegDir2D(pts, bSeg);
+                   Vector2 pDir = bSeg > 0 ? SegDir2D(pts, bSeg - 1) : cDir;
+                   Vector2 nDir = bSeg < pts.Count - 2 ? SegDir2D(pts, bSeg + 1) : cDir;
+                   Vector2 tang = bT < 0.5f
+                       ? Vector2.Lerp((pDir + cDir) * 0.5f, cDir, bT * 2f)
+                       : Vector2.Lerp(cDir, (cDir + nDir) * 0.5f, (bT - 0.5f) * 2f);
+                   tang.Normalize();
+                   Vector2 roadRight = new Vector2(-tang.y, tang.x);
+                   float side = Vector2.Dot(q - bPt, roadRight) >= 0f ? 1f : -1f;
+                   // Step outward by ditchTopDist to find the outer anchor
+                   Vector2 outerXZ = new Vector2(bPt.x, bPt.y) + roadRight * (side * ditchTopDist);
+                   Vector3 outerSample = new Vector3(
+                       Mathf.Clamp(outerXZ.x, tPos.x, tPos.x + tW),
+                       0f,
+                       Mathf.Clamp(outerXZ.y, tPos.z, tPos.z + tH));
+                   float ditchTopH = terrain.SampleHeight(outerSample) + tPos.y;
 
-                // ── Cosine blend between the two anchors ──────────
-                // tN = 0 at road edge, tN = 1 at ditch inner wall top
-                float tN = Mathf.Clamp01((cd - halfRoad) / stripWidth);
-                // Cosine ease — tangent continuous at both ends
-                float cosBlend = (1f - Mathf.Cos(tN * Mathf.PI)) * 0.5f;
-                float targetH = Mathf.Lerp(roadEdgeH, ditchTopH, cosBlend);
-                float targetN = Mathf.Clamp01((targetH - tPos.y) / tMaxY);
+                   // ── Cosine blend between the two anchors ──────────
+                   // tN = 0 at road edge, tN = 1 at ditch inner wall top
+                   float tN = Mathf.Clamp01((cd - halfRoad) / stripWidth);
+                   // Cosine ease — tangent continuous at both ends
+                   float cosBlend = (1f - Mathf.Cos(tN * Mathf.PI)) * 0.5f;
+                   float targetH = Mathf.Lerp(roadEdgeH, ditchTopH, cosBlend);
+                   float targetN = Mathf.Clamp01((targetH - tPos.y) / tMaxY);
 
-                heights[lz, lx] = Mathf.Lerp(heights[lz, lx], targetN,
-                                             roadToDitchBlendStrength);
-            }
+                   heights[lz, lx] = Mathf.Lerp(heights[lz, lx], targetN,
+                                                roadToDitchBlendStrength);
+               }
 
-        td.SetHeights(pxMin, pzMin, heights);
-    }
- */
+           td.SetHeights(pxMin, pzMin, heights);
+       }
+    */
     // ─────────────────────────────────────────────────────────
     //  Terrain – Paint
     // ─────────────────────────────────────────────────────────
@@ -3515,19 +3590,19 @@ public class RoadPathGenerator : ModBehaviour
         Terrain terrain = Terrain.activeTerrain;
         if (terrain == null) return;
         TerrainData td = terrain.terrainData;
-        int aw=td.alphamapWidth, ah=td.alphamapHeight, nl=td.alphamapLayers;
+        int aw = td.alphamapWidth, ah = td.alphamapHeight, nl = td.alphamapLayers;
         Vector3 tPos = terrain.transform.position;
         if (texIndex < 0 || texIndex >= nl) { Debug.LogWarning("[RoadPathGenerator] Paint index OOB."); return; }
 
-        float halfRoad = roadWidth*0.5f, sh = Mathf.Max(0f,shoulderWidth);
-        float fw = Mathf.Clamp(shoulderFalloff,0f,sh);
-        float fadeStart = halfRoad+(sh-fw), totalHalf = halfRoad+sh;
+        float halfRoad = roadWidth * 0.5f, sh = Mathf.Max(0f, shoulderWidth);
+        float fw = Mathf.Clamp(shoulderFalloff, 0f, sh);
+        float fadeStart = halfRoad + (sh - fw), totalHalf = halfRoad + sh;
 
         var activePts = new List<Vector3>();
-        for (int k=0;k<pts.Count;k++)
+        for (int k = 0; k < pts.Count; k++)
         {
-            int si=(styleIndices!=null&&k<styleIndices.Length)?styleIndices[k]:0;
-            if(styleFilter<0||si==styleFilter) activePts.Add(pts[k]);
+            int si = (styleIndices != null && k < styleIndices.Length) ? styleIndices[k] : 0;
+            if (styleFilter < 0 || si == styleFilter) activePts.Add(pts[k]);
         }
         if (activePts.Count < 2) return;
         // Pre-compute endpoint tangents for end-cap rejection.
@@ -3544,21 +3619,23 @@ public class RoadPathGenerator : ModBehaviour
         Vector2 paintEndOrigin = new Vector2(
             activePts[paintLastIdx].x, activePts[paintLastIdx].z);
 
-        float minX=float.MaxValue,maxX=float.MinValue,minZ=float.MaxValue,maxZ=float.MinValue;
-        foreach(Vector3 p in activePts)
-        { if(p.x-totalHalf<minX)minX=p.x-totalHalf; if(p.x+totalHalf>maxX)maxX=p.x+totalHalf;
-          if(p.z-totalHalf<minZ)minZ=p.z-totalHalf; if(p.z+totalHalf>maxZ)maxZ=p.z+totalHalf; }
-        int axMin=Mathf.Clamp(Mathf.FloorToInt(((minX-tPos.x)/td.size.x)*aw),0,aw-1);
-        int axMax=Mathf.Clamp(Mathf.CeilToInt( ((maxX-tPos.x)/td.size.x)*aw),0,aw-1);
-        int azMin=Mathf.Clamp(Mathf.FloorToInt(((minZ-tPos.z)/td.size.z)*ah),0,ah-1);
-        int azMax=Mathf.Clamp(Mathf.CeilToInt( ((maxZ-tPos.z)/td.size.z)*ah),0,ah-1);
-        int subW=axMax-axMin+1, subH=azMax-azMin+1;
+        float minX = float.MaxValue, maxX = float.MinValue, minZ = float.MaxValue, maxZ = float.MinValue;
+        foreach (Vector3 p in activePts)
+        {
+            if (p.x - totalHalf < minX) minX = p.x - totalHalf; if (p.x + totalHalf > maxX) maxX = p.x + totalHalf;
+            if (p.z - totalHalf < minZ) minZ = p.z - totalHalf; if (p.z + totalHalf > maxZ) maxZ = p.z + totalHalf;
+        }
+        int axMin = Mathf.Clamp(Mathf.FloorToInt(((minX - tPos.x) / td.size.x) * aw), 0, aw - 1);
+        int axMax = Mathf.Clamp(Mathf.CeilToInt(((maxX - tPos.x) / td.size.x) * aw), 0, aw - 1);
+        int azMin = Mathf.Clamp(Mathf.FloorToInt(((minZ - tPos.z) / td.size.z) * ah), 0, ah - 1);
+        int azMax = Mathf.Clamp(Mathf.CeilToInt(((maxZ - tPos.z) / td.size.z) * ah), 0, ah - 1);
+        int subW = axMax - axMin + 1, subH = azMax - azMin + 1;
         float[,,] alphas = td.GetAlphamaps(axMin, azMin, subW, subH);
 
-        for (int lz=0;lz<subH;lz++) for (int lx=0;lx<subW;lx++)
-        {
-            float wx=tPos.x+((axMin+lx)/(float)aw)*td.size.x;
-            float wz=tPos.z+((azMin+lz)/(float)ah)*td.size.z;
+        for (int lz = 0; lz < subH; lz++) for (int lx = 0; lx < subW; lx++)
+            {
+                float wx = tPos.x + ((axMin + lx) / (float)aw) * td.size.x;
+                float wz = tPos.z + ((azMin + lz) / (float)ah) * td.size.z;
                 // Global paint uses the blurred distance field for smooth
                 // zigzag-free edges.  Falls back to direct search for pixels
                 // outside the field bounding box.
@@ -3612,14 +3689,14 @@ public class RoadPathGenerator : ModBehaviour
                         if (pixelH > flattenTarget + 1.0f) continue;
                     }
                 }
-                float str=(cd<=fadeStart||fw<0.001f)?strength:strength*(1f-Mathf.Clamp01((cd-fadeStart)/fw));
-            if (str<0.001f) continue;
-            float nv=Mathf.Lerp(alphas[lz,lx,texIndex],1f,str);
-            alphas[lz,lx,texIndex]=nv;
-            float os=0f;
-            for(int l=0;l<nl;l++) if(l!=texIndex) os+=alphas[lz,lx,l];
-            if(os>0.0001f){float sc=(1f-nv)/os; for(int l=0;l<nl;l++) if(l!=texIndex) alphas[lz,lx,l]*=sc;}
-        }
+                float str = (cd <= fadeStart || fw < 0.001f) ? strength : strength * (1f - Mathf.Clamp01((cd - fadeStart) / fw));
+                if (str < 0.001f) continue;
+                float nv = Mathf.Lerp(alphas[lz, lx, texIndex], 1f, str);
+                alphas[lz, lx, texIndex] = nv;
+                float os = 0f;
+                for (int l = 0; l < nl; l++) if (l != texIndex) os += alphas[lz, lx, l];
+                if (os > 0.0001f) { float sc = (1f - nv) / os; for (int l = 0; l < nl; l++) if (l != texIndex) alphas[lz, lx, l] *= sc; }
+            }
         td.SetAlphamaps(axMin, azMin, alphas);
     }
 
@@ -3726,28 +3803,28 @@ public class RoadPathGenerator : ModBehaviour
     }
 
     static Vector2 SegDir2D(List<Vector3> pts, int si)
-    { return (new Vector2(pts[si+1].x,pts[si+1].z)-new Vector2(pts[si].x,pts[si].z)).normalized; }
+    { return (new Vector2(pts[si + 1].x, pts[si + 1].z) - new Vector2(pts[si].x, pts[si].z)).normalized; }
 
     static float ClosestPointOnSegment2D(Vector2 p, Vector2 a, Vector2 b, out float t)
     {
-        Vector2 ab=b-a; float len2=ab.sqrMagnitude;
-        if(len2<0.00001f){t=0f;return(p-a).magnitude;}
-        t=Mathf.Clamp01(Vector2.Dot(p-a,ab)/len2);
-        return(p-(a+ab*t)).magnitude;
+        Vector2 ab = b - a; float len2 = ab.sqrMagnitude;
+        if (len2 < 0.00001f) { t = 0f; return (p - a).magnitude; }
+        t = Mathf.Clamp01(Vector2.Dot(p - a, ab) / len2);
+        return (p - (a + ab * t)).magnitude;
     }
 
     static float HorizDist(Vector3 a, Vector3 b)
-    { float dx=b.x-a.x,dz=b.z-a.z; return Mathf.Sqrt(dx*dx+dz*dz); }
+    { float dx = b.x - a.x, dz = b.z - a.z; return Mathf.Sqrt(dx * dx + dz * dz); }
 
     static float[] BuildArcLengths(List<Vector3> pts)
     {
-        float[] l=new float[pts.Count];
-        for(int i=1;i<pts.Count;i++) l[i]=l[i-1]+Vector3.Distance(pts[i],pts[i-1]);
+        float[] l = new float[pts.Count];
+        for (int i = 1; i < pts.Count; i++) l[i] = l[i - 1] + Vector3.Distance(pts[i], pts[i - 1]);
         return l;
     }
 
     static Vector3 GetForward(List<Vector3> pts, int i)
-    { return i<pts.Count-1?(pts[i+1]-pts[i]).normalized:(pts[i]-pts[i-1]).normalized; }
+    { return i < pts.Count - 1 ? (pts[i + 1] - pts[i]).normalized : (pts[i] - pts[i - 1]).normalized; }
 
     // ─────────────────────────────────────────────────────────
     //  Velocity Marker Baking
@@ -3930,203 +4007,6 @@ public class RoadPathGenerator : ModBehaviour
         Debug.Log("[RoadPathGenerator] Baked " +
                   bakedMarkerPositions.Length + " velocity markers.");
     }
-
-    // ─────────────────────────────────────────────────────────
-    //  Rock Scatter
-    //  Places prefabs from rockScatterPrefabs in the shoulder
-    //  zone between ditch outer toe and berm start.
-    //  Editor only — rocks are real scene GameObjects that
-    //  persist into the exported build via scene save.
-    //
-    //  Uses a grid-based placement approach for performance:
-    //  zone divided into cells sized to rockScatterMinSpacing,
-    //  one attempt per cell with random offset, overlap checked
-    //  against neighbouring cells only — no global search.
-    // ─────────────────────────────────────────────────────────
-
-#if UNITY_EDITOR
-    void ScatterRocks()
-    {
-        if (rockScatterPrefabs == null || rockScatterPrefabs.Count == 0) return;
-        if (_distField == null) return;
-        Terrain terrain = Terrain.activeTerrain;
-        if (terrain == null) return;
-
-        // ── Zone boundaries ───────────────────────────────────
-        float halfRoad      = roadWidth * 0.5f;
-        float ditchFloorEnd = halfRoad + ditchOffset
-                              + ditchInnerWidth + ditchBottomWidth;
-        float ditchOuterToe = ditchFloorEnd + ditchOuterWidth;
-
-        float zoneInner = generateDitch
-            ? ditchOuterToe
-            : halfRoad + shoulderSmoothDistance;
-
-        // Berm start — same calculation as ApplyBermToTerrain
-        float shoulderOuter = generateDitch
-            ? ditchFloorEnd + shoulderSmoothDistance
-            : halfRoad + shoulderSmoothDistance;
-
-        float zoneOuter = generateBerm
-            ? (generateDitch && smoothShoulder ? shoulderOuter
-               : generateDitch                 ? ditchFloorEnd
-               : smoothShoulder                ? shoulderOuter
-               : halfRoad)
-            : zoneInner + shoulderSmoothDistance;
-
-        if (zoneOuter <= zoneInner) return;
-
-        // ── Endpoint tangents for end-cap rejection ───────────
-        List<Vector3> pts = _cachedSplinePoints;
-        if (pts == null || pts.Count < 2) return;
-        Vector2 startTangent = new Vector2(
-            pts[1].x - pts[0].x, pts[1].z - pts[0].z).normalized;
-        Vector2 startOrigin  = new Vector2(pts[0].x, pts[0].z);
-        int     lastIdx      = pts.Count - 1;
-        Vector2 endTangent   = new Vector2(
-            pts[lastIdx].x - pts[lastIdx-1].x,
-            pts[lastIdx].z - pts[lastIdx-1].z).normalized;
-        Vector2 endOrigin    = new Vector2(pts[lastIdx].x, pts[lastIdx].z);
-
-        // ── Create or clear container ─────────────────────────
-        Transform container = transform.Find("RockScatter");
-        if (container == null)
-        {
-            GameObject go = new GameObject("RockScatter");
-            go.transform.SetParent(transform, false);
-            container = go.transform;
-        }
-
-        // ── Grid setup ────────────────────────────────────────
-        float cellSize = rockScatterMinSpacing;
-        System.Random rng = new System.Random(rockScatterSeed);
-
-        TerrainData td   = terrain.terrainData;
-        float tW         = td.size.x, tH = td.size.z;
-        Vector3 tPos     = terrain.transform.position;
-        int hw           = td.heightmapResolution;
-
-        // Build candidate cells from distance field pixels
-        // that fall within the shoulder zone
-        Dictionary<int, Vector3> placedCells =
-            new Dictionary<int, Vector3>();
-
-        for (int lz = 0; lz < _distField.subH; lz++)
-        for (int lx = 0; lx < _distField.subW; lx++)
-        {
-            int   idx = _distField.Idx(lz, lx);
-            float cd  = _distField.crossDist[idx];
-            if (cd < zoneInner || cd > zoneOuter) continue;
-
-            float wx = tPos.x + ((_distField.pxMin+lx)/(float)(hw-1))*tW;
-            float wz = tPos.z + ((_distField.pzMin+lz)/(float)(hw-1))*tH;
-
-            // End-cap rejection
-            Vector2 pq = new Vector2(wx, wz);
-            if (Vector2.Dot(pq - startOrigin, startTangent) < 0f) continue;
-            if (Vector2.Dot(pq - endOrigin,   endTangent)   > 0f) continue;
-
-            // Density check — skip cell based on density setting
-            if (rng.NextDouble() > rockScatterDensity * cellSize * cellSize)
-                continue;
-
-            // Add random offset within cell
-            float ox = (float)(rng.NextDouble() - 0.5) * cellSize;
-            float oz = (float)(rng.NextDouble() - 0.5) * cellSize;
-            float px = wx + ox;
-            float pz = wz + oz;
-
-            // Grid cell key for overlap check
-            int cx = Mathf.FloorToInt(px / cellSize);
-            int cz = Mathf.FloorToInt(pz / cellSize);
-            int key = cx * 100000 + cz;
-
-            // Check neighbouring cells for minimum spacing
-            bool tooClose = false;
-            for (int nx = cx-1; nx <= cx+1 && !tooClose; nx++)
-            for (int nz = cz-1; nz <= cz+1 && !tooClose; nz++)
-            {
-                int nkey = nx * 100000 + nz;
-                if (placedCells.ContainsKey(nkey))
-                {
-                    Vector3 other = placedCells[nkey];
-                    float dx = other.x - px;
-                    float dz2 = other.z - pz;
-                    float minSpacingSq = rockScatterMinSpacing * rockScatterMinSpacing;
-                    if (dx*dx + dz2*dz2 < minSpacingSq)
-                        tooClose = true;
-                }
-            }
-            if (tooClose) continue;
-
-            // ── Place rock ────────────────────────────────────
-            float py = SampleTerrainHeight(
-                new Vector3(px, 0f, pz), terrain);
-
-            // Pick random prefab
-            int prefabIdx = rng.Next(0, rockScatterPrefabs.Count);
-            RockScatterEntry entry = rockScatterPrefabs[prefabIdx];
-            if (entry == null || entry.prefab == null) continue;
-
-            // Random scale
-            float scale = Mathf.Lerp(rockScatterMinScale,
-                rockScatterMaxScale, (float)rng.NextDouble());
-
-            // Random Y rotation
-            float rotY = Mathf.Lerp(rockScatterMinRotY,
-                rockScatterMaxRotY, (float)rng.NextDouble());
-
-            // Random XZ tilt
-            float tiltX = (float)(rng.NextDouble() - 0.5) * 2f
-                          * rockScatterMaxTilt;
-            float tiltZ = (float)(rng.NextDouble() - 0.5) * 2f
-                          * rockScatterMaxTilt;
-
-            Quaternion rot = Quaternion.Euler(tiltX, rotY, tiltZ);
-
-            // Align to slope if enabled
-            if (rockScatterAlignToSlope)
-            {
-                Vector3 normal = terrain.terrainData
-                    .GetInterpolatedNormal(
-                        (px - tPos.x) / tW,
-                        (pz - tPos.z) / tH);
-                Quaternion slopeRot = Quaternion.FromToRotation(
-                    Vector3.up, normal);
-                rot = slopeRot * Quaternion.Euler(
-                    tiltX, rotY, tiltZ);
-            }
-
-            GameObject rock = (GameObject)
-                UnityEditor.PrefabUtility.InstantiatePrefab(
-                    entry.prefab);
-            rock.transform.SetParent(container, true);
-            rock.transform.position   =
-                new Vector3(px, py, pz);
-            rock.transform.rotation   = rot;
-            rock.transform.localScale =
-                Vector3.one * scale;
-
-            // Add mesh collider if requested
-            if (entry.addMeshCollider)
-            {
-                MeshFilter mf =
-                    rock.GetComponentInChildren<MeshFilter>();
-                if (mf != null)
-                {
-                    MeshCollider mc =
-                        rock.AddComponent<MeshCollider>();
-                    mc.sharedMesh = mf.sharedMesh;
-                }
-            }
-
-            placedCells[key] = new Vector3(px, py, pz);
-        }
-
-        Debug.Log("[RoadPathGenerator] Scattered " +
-                  container.childCount + " rocks.");
-    }
-#endif
 
     // ─────────────────────────────────────────────────────────
     //  Gizmos
@@ -4478,4 +4358,3 @@ public class RoadPathGenerator : ModBehaviour
         }
     }
 }
-
